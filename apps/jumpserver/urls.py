@@ -31,6 +31,7 @@ resource_api = [
     path('rbac/', include('rbac.urls.api_urls', namespace='api-rbac')),
     path('labels/', include('labels.urls', namespace='api-label')),
     path('reports/', include('reports.urls.api_urls', namespace='api-reports')),
+    path('grydd_platform/', include('grydd_platform.urls', namespace='api-grydd_platform')),
 ]
 
 api_v1 = resource_api + [
@@ -45,7 +46,9 @@ if settings.MCP_ENABLED:
     ])
 
 app_view_patterns = [
+    path('auth/login/', views.IAMLoginRedirectView.as_view(), name='auth-login-redirect'),
     path('auth/', include('authentication.urls.view_urls'), name='auth'),
+    path('auth/iam/', include('authentication.urls.oidc'), name='iam-auth'),  
     path('ops/', include('ops.urls.view_urls'), name='ops'),
     path('reports/', include('reports.urls.view_urls'), name='reports'),
     path('tickets/', include('tickets.urls.view_urls'), name='tickets'),

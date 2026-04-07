@@ -20,7 +20,7 @@ from common.views.http import HttpResponseTemporaryRedirect
 __all__ = [
     'LunaView', 'I18NView', 'KokoView', 'WsView',
     'redirect_format_api', 'redirect_old_apps_view', 'UIView',
-    'ResourceDownload', 'RedirectConfirm'
+    'ResourceDownload', 'RedirectConfirm', 'IAMLoginRedirectView'
 ]
 
 
@@ -151,3 +151,17 @@ class RedirectConfirm(TemplateView):
         if parsed.scheme not in ['http', 'https', 'jms']:
             return False
         return True
+    
+class IAMLoginRedirectView(View):
+    """
+    Intercepts /core/auth/login/ which Lina hardcodes for 401 redirects.
+    Sends the user directly to the IAM login instead.
+    """
+    def get(self, request, *args, **kwargs):
+        next_url = request.GET.get('next', '/ui/')
+        # Sanitize — never redirect back to login page or root
+        if not next_url or next_url in ('/', '/core/auth/login/', '/core/auth/login'):
+            next_url = '/ui/'
+        return HttpResponseRedirect(
+            f'/core/auth/iam/login/?next={next_url}'
+        )

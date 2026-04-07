@@ -81,69 +81,17 @@ def check_user_property_is_correct(username, **properties):
 
 
 def get_auth_methods():
+    """
+    Returns auth methods shown on the Lina login page.
+    Single IAM instance — returns one login button
+    pointing to the IAM login view.
+    """
     return [
         {
-            'name': 'OpenID',
-            'enabled': settings.AUTH_OPENID,
-            'url': reverse('authentication:openid:login'),
-            'logo': static('img/login_oidc_logo.png'),
-            'auto_redirect': True  # 是否支持自动重定向
-        },
-        {
-            'name': 'CAS',
-            'enabled': settings.AUTH_CAS,
-            'url': reverse('authentication:cas:cas-login'),
-            'logo': static('img/login_cas_logo.png'),
-            'auto_redirect': True
-        },
-        {
-            'name': 'SAML2',
-            'enabled': settings.AUTH_SAML2,
-            'url': reverse('authentication:saml2:saml2-login'),
-            'logo': static('img/login_saml2_logo.png'),
-            'auto_redirect': True
-        },
-        {
-            'name': settings.AUTH_OAUTH2_PROVIDER,
-            'enabled': settings.AUTH_OAUTH2,
-            'url': reverse('authentication:oauth2:login'),
-            'logo': static_or_direct(settings.AUTH_OAUTH2_LOGO_PATH),
-            'auto_redirect': True
-        },
-        {
-            'name': _('WeCom'),
-            'enabled': settings.AUTH_WECOM,
-            'url': reverse('authentication:wecom-qr-login'),
-            'logo': static('img/login_wecom_logo.png'),
-        },
-        {
-            'name': _('DingTalk'),
-            'enabled': settings.AUTH_DINGTALK,
-            'url': reverse('authentication:dingtalk-qr-login'),
-            'logo': static('img/login_dingtalk_logo.png')
-        },
-        {
-            'name': _('FeiShu'),
-            'enabled': settings.AUTH_FEISHU,
-            'url': reverse('authentication:feishu-qr-login'),
-            'logo': static('img/login_feishu_logo.png')
-        },
-        {
-            'name': 'Lark',
-            'enabled': settings.AUTH_LARK,
-            'url': reverse('authentication:lark-qr-login'),
-            'logo': static('img/login_lark_logo.png')
-        },
-        {
-            'name': _('Slack'),
-            'enabled': settings.AUTH_SLACK,
-            'url': reverse('authentication:slack-qr-login'),
-            'logo': static('img/login_slack_logo.png')
-        },
-        {
-            'name': _("Passkey"),
-            'enabled': settings.AUTH_PASSKEY,
-            'url': reverse('api-auth:passkey-login'),
-            'logo': static('img/login_passkey.png')
+            'name': 'iam',
+            'label': 'Login with IAM',
+            'url': '/core/auth/iam/login/',
+            'logo': '',
+            'auto_redirect': True,  # auto-redirect since it's the only method
         }
     ]
