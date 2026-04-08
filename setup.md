@@ -54,3 +54,33 @@ uv sync --no-group xpack --python 3.11
 
 # Then start
 uv run python jms start web
+
+
+-------------------------------------------- POST App Setup for Debugging -----------------------------------------------------------------------
+
+#  Keep files on Windows, use rsync to sync changes
+# Run this every time you make changes on Windows
+rsync -av --exclude='.venv' --exclude='__pycache__' \
+  /mnt/c/workspace/FORGE-D/pam-workspace/jumpserver/ \
+  ~/jumpserver/
+
+# To override the default mapping via shell:
+    uv run python apps/manage.py shell -c "
+    from grydd_platform.models import IAMConfig
+    config = IAMConfig.get_active()
+    config.role_mapping = {
+        'my-custom-admin-group': 'SystemAdmin',
+        'my-auditor-group': 'SystemAuditor',
+    }
+    config.save()
+    print('Updated:', config.role_mapping)
+    "
+
+# To revert to default (clear DB mapping so code default is used):
+    uv run python apps/manage.py shell -c "
+    from grydd_platform.models import IAMConfig
+    config = IAMConfig.get_active()
+    config.role_mapping = {}  # empty = use DEFAULT_ROLE_MAPPING
+    config.save()
+    print('Cleared — will use DEFAULT_ROLE_MAPPING')
+    "

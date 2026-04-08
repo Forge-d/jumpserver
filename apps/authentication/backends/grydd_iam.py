@@ -14,6 +14,16 @@ from authentication.backends.base import JMSModelBackend
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
+# ── Default Role Mapping ──────────────────────────────────────────────────────
+# Maps Keycloak group names (from 'groups' claim) → JumpServer role names.
+# Override via IAMConfig.role_mapping in DB (shell or API).
+# Valid JumpServer system roles: SystemAdmin, SystemAuditor, User
+DEFAULT_ROLE_MAPPING = {
+    'System_Administrator': 'SystemAdmin',
+    'System_Auditors': 'SystemAuditor',
+    'System_Users': 'User',
+}
+
 
 # ── PKCE Helpers ──────────────────────────────────────────────────────────────
 
@@ -160,7 +170,152 @@ class IAMOIDCBackend(JMSModelBackend):
                 user.set_unusable_password()
                 user.save()
 
+        # Sync roles from token on every login
+        self._sync_roles(user, claims, iam_config)
+
         return user   
+    
+
+    def _get_role_mapping(self, iam_config) -> dict:
+        """
+        Get effective role mapping.
+        Uses DB config if set, otherwise falls back to DEFAULT_ROLE_MAPPING.
+        """
+        db_mapping = getattr(iam_config, 'role_mapping', None) or {}
+        if db_mapping:
+            logger.debug("Using role_mapping from DB: %s", db_mapping)
+            return db_mapping
+        logger.debug("Using DEFAULT_ROLE_MAPPING: %s", DEFAULT_ROLE_MAPPING)
+        return DEFAULT_ROLE_MAPPING
+
+    def _sync_roles(self, user, claims: dict, iam_config):
+        """
+        Sync JumpServer system roles from the 'groups' claim on every login.
+
+        IAM sends groups as:
+            {"groups": ["System_Administrator", "System_Users"]}
+
+        role_mapping (from DB or DEFAULT_ROLE_MAPPING) maps:
+            {"System_Administrator": "SystemAdmin", "System_Users": "User"}
+
+        On every login:
+          - Groups present in token → roles assigned in JumpServer
+          - Groups removed in IAM → roles removed in JumpServer on next login
+          - Only roles listed as values in role_mapping are managed here
+            (manually assigned roles outside the mapping are never touched)
+        """
+        try:
+            from rbac.models import Role, RoleBinding
+            from django.db import connection
+
+            role_mapping = self._get_role_mapping(iam_config)
+
+            # ── Read 'groups' claim only ───────────────────────────────────
+            raw_groups = claims.get('groups', [])
+            # Normalise: strip leading slash in case full path is used
+            token_groups = {g.lstrip('/') for g in raw_groups}
+
+            logger.info(
+                "Role sync: user=%s token_groups=%s role_mapping=%s",
+                user.username, token_groups, role_mapping
+            )
+
+            # ── Determine which JumpServer roles the user should have ──────
+            target_role_names = {
+                js_role
+                for iam_group, js_role in role_mapping.items()
+                if iam_group in token_groups
+            }
+
+            logger.info(
+                "Role sync: user=%s target_roles=%s",
+                user.username, target_role_names
+            )
+
+            # ── Managed role names — only roles we control ─────────────────
+            managed_role_names = set(role_mapping.values())
+
+            # ── Get current managed bindings via raw SQL ───────────────────
+            # Raw SQL needed because RoleBinding's custom manager
+            # applies org context filters that hide system-scoped bindings
+            with connection.cursor() as cursor:
+                cursor.execute('''
+                    SELECT rb.id, r.name
+                    FROM rbac_rolebinding rb
+                    JOIN rbac_role r ON rb.role_id = r.id
+                    WHERE rb.user_id = %s
+                    AND r.name = ANY(%s)
+                    AND rb.org_id IS NULL
+                ''', [str(user.id), list(managed_role_names)])
+                current_bindings = {
+                    row[1]: row[0]   # role_name → binding_id
+                    for row in cursor.fetchall()
+                }
+
+            logger.info(
+                "Role sync: user=%s current_managed_roles=%s",
+                user.username, list(current_bindings.keys())
+            )
+
+            # ── Remove roles no longer in token ───────────────────────────
+            roles_to_remove = set(current_bindings.keys()) - target_role_names
+            if roles_to_remove:
+                binding_ids_to_delete = [
+                    current_bindings[name]
+                    for name in roles_to_remove
+                ]
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        'DELETE FROM rbac_rolebinding WHERE id = ANY(%s)',
+                        [binding_ids_to_delete]
+                    )
+                logger.info(
+                    "Role sync: removed roles=%s from user=%s",
+                    roles_to_remove, user.username
+                )
+
+            # ── Add roles now in token ─────────────────────────────────────
+            roles_to_add = target_role_names - set(current_bindings.keys())
+            if roles_to_add:
+                # Fetch role objects for roles to add
+                roles = {
+                    r.name: r
+                    for r in Role.objects.filter(
+                        name__in=roles_to_add,
+                        scope='system'
+                    )
+                }
+                for role_name in roles_to_add:
+                    role = roles.get(role_name)
+                    if not role:
+                        logger.warning(
+                            "Role '%s' not found in JumpServer — skipping",
+                            role_name
+                        )
+                        continue
+                    RoleBinding.objects.create(
+                        user=user,
+                        role=role,
+                        org=None,
+                    )
+                    logger.info(
+                        "Role sync: assigned role=%s to user=%s",
+                        role_name, user.username
+                    )
+
+            if not roles_to_remove and not roles_to_add:
+                logger.info(
+                    "Role sync: no changes needed for user=%s",
+                    user.username
+                )
+
+        except Exception as e:
+            # Never block login due to role sync failure
+            logger.error(
+                "Role sync failed for user=%s: %s",
+                user.username, e,
+                exc_info=True
+            )
   
 
     # ── Django Backend Required Method ────────────────────────────────────────
