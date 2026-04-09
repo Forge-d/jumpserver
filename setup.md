@@ -46,11 +46,20 @@ docker compose -f docker-compose.dev.yml up -d db redis
 # Wait for DB to be healthy
 docker compose -f docker-compose.dev.yml ps
 
+# Run supporting services 
+docker compose -f docker-compose.dev.yml up -d db redis koko lion chen web core
+
 # Activate venv
 source .venv/bin/activate
 
 # Sync again (optional | onetime only)
 uv sync --no-group xpack --python 3.11
+
+# Create migrations for grydd_platform (first time setup and on model change)
+uv run python apps/manage.py makemigrations grydd_platform 
+ 
+# Apply migrations (first time setup and on model change)
+uv run python apps/manage.py migrate grydd_platform
 
 # Then start
 uv run python jms start web
