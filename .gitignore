@@ -19,7 +19,7 @@ dump.rdb
 .fleet/
 db.sqlite3
 config.py
-config.yml
+#config.yml
 *.log
 host_rsa_key
 *.bat

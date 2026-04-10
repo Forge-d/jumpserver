@@ -72,6 +72,7 @@ urlpatterns = [
     # External apps url
     path('core/auth/captcha/', include('captcha.urls')),
     path('core/', include(app_view_patterns)),
+    path("", include("authentication.backends.grydd_m2m.urls")),
 ]
 
 # 静态文件处理路由

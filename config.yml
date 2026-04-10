@@ -1,0 +1,113 @@
+# SECURITY WARNING: keep the secret key used in production secret!
+# $ cat /dev/urandom | tr -dc A-Za-z0-9 | head -c 49;echo
+SECRET_KEY: "YourLongRandomSecretKeyAtLeast50CharactersHere1234567890abc"
+ 
+# SECURITY WARNING: keep the bootstrap token used in production secret!
+BOOTSTRAP_TOKEN: "ChangeMeToA24CharToken123456"
+ 
+# Development env open this, when error occur display the full process track, Production disable it
+# DEBUG: true
+ 
+# DEBUG, INFO, WARNING, ERROR, CRITICAL can set. See https://docs.djangoproject.com/en/1.10/topics/logging/
+# LOG_LEVEL: DEBUG
+# LOG_DIR:
+ 
+# Session expiration setting, Default 1 hour, Also set expired on on browser close
+# SESSION_COOKIE_AGE: 3600
+# SESSION_EXPIRE_AT_BROWSER_CLOSE: false
+ 
+# Database setting, Support sqlite3, mysql, postgres ....
+# See https://docs.djangoproject.com/en/1.10/ref/settings/#databases
+ 
+# SQLite setting:
+# DB_ENGINE: sqlite3
+# DB_NAME:
+# MySQL or postgres setting like:
+
+DB_ENGINE: postgresql
+DB_HOST: 127.0.0.1
+DB_PORT: 5432
+DB_USER: jumpserver
+DB_PASSWORD: jms_dev_pass_2024
+DB_NAME: jumpserver
+ 
+# When Django start it will bind this host and port
+# ./manage.py runserver 127.0.0.1:8080
+HTTP_BIND_HOST: 0.0.0.0
+HTTP_LISTEN_PORT: 8080
+WS_LISTEN_PORT: 8070
+ 
+# Use Redis as broker for celery and web socket
+# Redis
+REDIS_HOST: 127.0.0.1
+REDIS_PORT: 6379
+REDIS_PASSWORD: redis_dev_pass_2024
+# REDIS_PASSWORD:
+# REDIS_DB_CELERY: 3
+# REDIS_DB_CACHE: 4
+ 
+LOG_LEVEL: DEBUG
+DEBUG: true
+# LDAP/AD settings
+# LDAP 
+# AUTH_LDAP_SEARCH_PAGED_SIZE: 1000
+#
+
+# AUTH_LDAP_SYNC_IS_PERIODIC: True
+
+# AUTH_LDAP_SYNC_INTERVAL: 12
+# Crontab 
+# AUTH_LDAP_SYNC_CRONTAB: * 6 * * *
+#
+# LDAP 用户登录时仅允许在用户列表中的用户执行 LDAP Server 认证
+# AUTH_LDAP_USER_LOGIN_ONLY_IN_USERS: False
+#
+# LDAP  0 (https://www.python-ldap.org/en/latest/faq.html)
+# In order to perform this operation a successful bind must be completed on the connection
+# AUTH_LDAP_OPTIONS_OPT_REFERRALS: -1
+ 
+# OTP settings
+# OTP/MFA 
+# OTP_VALID_WINDOW: 0
+# OTP_ISSUER_NAME: JumpServer
+ 
+
+# PERIOD_TASK_ENABLED: True
+#
+ 
+
+# SECURITY_WATERMARK_ENABLED: False
+ 
+
+# SESSION_EXPIRE_AT_BROWSER_CLOSE: False
+ 
+
+# SESSION_SAVE_EVERY_REQUEST: True
+ 
+
+# ONLY_ALLOW_AUTH_FROM_SOURCE: False
+ 
+
+# ONLY_ALLOW_EXIST_USER_AUTH: False
+ 
+
+#FACE_RECOGNITION_ENABLED: true
+#FACE_RECOGNITION_DISTANCE_THRESHOLD': 0.35
+#FACE_RECOGNITION_COSINE_THRESHOLD': 0.95
+ 
+# Platform / Multi-tenancy bootstrap
+PLATFORM_IAM_SERVER_URL: https://iamdev.the-grydd.com
+PLATFORM_MASTER_TENANT: bab49efc-bd0f-41df-9939-a0c36d67dac0
+PLATFORM_MASTER_CLIENT_ID: 3589699c-a829-4028-a64b-bc43018ad8f0
+PLATFORM_MASTER_CLIENT_SECRET: P6SdL3IxxA7PjtPqXKVqKADj0yz9t7nx
+PLATFORM_ADMIN_USERNAME: vishal.patel@1rivet.com
+PLATFORM_ADMIN_EMAIL: vishal.patel@1rivet.com
+
+# jumpserver-bridge client (JumpServer's M2M client in Keycloak)
+JMS_M2M_CLIENT_ID: 23577d0f-f61d-470e-aaf8-eec0d2ab4bb8
+JMS_M2M_CLIENT_SECRET: MyhkHGEl3trha2khEZGD44d3q3yM0hRg
+ 
+# The JumpServer OIDC client_id in Keycloak (what alice logs in through)
+JMS_OIDC_CLIENT_ID: 23577d0f-f61d-470e-aaf8-eec0d2ab4bb8
+ 
+DOMAINS: "localhost,iamdev.the-grydd.com"
