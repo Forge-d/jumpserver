@@ -7,6 +7,13 @@ from users.models import User
 from .base import BaseConfirm
 from ..const import ConfirmType
 
+# Sentinel returned by authenticate() when the IAM session has expired and the
+# frontend must redirect the user to IAM for a fresh 2FA challenge.
+IAM_STEPUP_REQUIRED = 'iam_stepup_required'
+
+# URL of the IAM step-up view.
+IAM_STEPUP_PATH = '/core/auth/iam/stepup/'
+
 
 class ConfirmMFA(BaseConfirm):
     name = ConfirmType.MFA.value
@@ -18,10 +25,7 @@ class ConfirmMFA(BaseConfirm):
         return getattr(self.user, 'source', '') == 'grydd-iam'
 
     def _iam_mfa_session_valid(self) -> bool:
-        """
-        Return True if the current session carries a valid IAM MFA marker that
-        has not yet exceeded SECURITY_MFA_VERIFY_TTL.
-        """
+        """True if the session has an un-expired IAM MFA marker."""
         if self.request.session.get('auth_mfa_type') != 'iam':
             return False
         mfa_time = self.request.session.get('auth_mfa_time', 0)
@@ -31,16 +35,17 @@ class ConfirmMFA(BaseConfirm):
     # ── BaseConfirm interface ─────────────────────────────────────────────────
 
     def check(self) -> bool:
-        # IAM users always satisfy the MFA check requirement — their second
-        # factor was performed at the IAM provider during login.
+        # IAM users always satisfy the presence check — their 2FA was performed
+        # at the IAM provider.  Expiry is handled in authenticate().
         if self._is_iam_user():
             return True
         return bool(self.user.active_mfa_backends and self.user.mfa_enabled)
 
     @property
     def content(self):
-        # IAM users need no local code input — MFA was done at IAM.
-        # Returning an empty list signals to the UI that no input is required.
+        # Return empty content for IAM users — no code input is needed.
+        # The confirm POST endpoint handles the step-up redirect when the
+        # session has expired; within the TTL the POST passes automatically.
         if self._is_iam_user():
             return []
         backends = User.get_user_mfa_backends(self.user)
@@ -53,14 +58,13 @@ class ConfirmMFA(BaseConfirm):
 
     def authenticate(self, secret_key, mfa_type):
         if self._is_iam_user():
-            # For IAM users, verify the session still carries an active IAM MFA
-            # marker within the allowed TTL. No local code entry is required.
             if self._iam_mfa_session_valid():
+                # Session still carries a live IAM MFA marker — pass immediately.
                 return True, ''
-            return False, _(
-                'IAM MFA session has expired. Please log out and log in again '
-                'to re-authenticate with your second factor.'
-            )
+            # Session has expired.  Signal the viewset to initiate IAM step-up.
+            return False, IAM_STEPUP_REQUIRED
+
+        # ── Regular users: existing OTP / SMS / Email flow ────────────────────
         mfa_backend = self.user.get_mfa_backend_by_type(mfa_type)
         mfa_backend.set_request(self.request)
         ok, msg = mfa_backend.check_code(secret_key)

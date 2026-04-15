@@ -22,7 +22,91 @@ def get_redirect_uri(request):
     return request.build_absolute_uri('/core/auth/iam/callback/')
 
 
+def _build_iam_auth_url(request, iam_config, *, extra_params=None):
+    """
+    Build the IAM authorization URL with PKCE + MFA ACR and store OIDC
+    session state.  Returns (auth_url, state).
+
+    extra_params is merged into the query-string after defaults are set,
+    allowing callers to add prompt=login or override acr_values.
+    """
+    code_verifier = generate_code_verifier()
+    code_challenge = generate_code_challenge(code_verifier, iam_config.pkce_method)
+    state = generate_state()
+
+    request.session['oidc_code_verifier'] = code_verifier
+    request.session['oidc_state'] = state
+    request.session['oidc_config_id'] = str(iam_config.id)
+    request.session.modified = True
+
+    acr_values = iam_config.require_mfa_acr or 'urn:iam:acr:2fa:any'
+
+    params = {
+        'response_type': 'code',
+        'client_id': iam_config.client_id,
+        'redirect_uri': get_redirect_uri(request),
+        'scope': iam_config.scopes,
+        'state': state,
+        'code_challenge': code_challenge,
+        'code_challenge_method': iam_config.pkce_method,
+        'acr_values': acr_values,
+    }
+    if extra_params:
+        params.update(extra_params)
+
+    auth_url = f"{iam_config.authorization_endpoint}?{urlencode(params)}"
+    return auth_url, state
+
+
+def _set_iam_mfa_session(request, user, iam_mfa_verified, claims):
+    """
+    Write all MFA and confirm session keys required by JumpServer's two
+    independent auth gates:
+
+    1. Login MFA gate  — MFAMiddleware / on_user_auth_login_success signal
+       Keys: auth_mfa, auth_mfa_username, auth_mfa_time, auth_mfa_required,
+             auth_mfa_type
+
+    2. Action-level confirm gate — UserConfirmation permission class
+       Keys: CONFIRM_LEVEL, CONFIRM_TYPE, CONFIRM_TIME
+
+    Both gates use SECURITY_MFA_VERIFY_TTL as their TTL, so stamping them
+    together keeps the expiry in sync.
+    """
+    from authentication.const import ConfirmType
+    now = int(time.time())
+
+    # Gate 1 — login MFA
+    request.session['auth_mfa'] = 1
+    request.session['auth_mfa_username'] = user.username
+    request.session['auth_mfa_time'] = now
+    request.session['auth_mfa_required'] = 0
+    request.session['auth_mfa_type'] = 'iam'
+
+    # Gate 2 — action-level confirm (MFA = highest level = 3)
+    mfa_confirm_level = ConfirmType.values.index(ConfirmType.MFA) + 1
+    request.session['CONFIRM_LEVEL'] = mfa_confirm_level
+    request.session['CONFIRM_TYPE'] = ConfirmType.MFA
+    request.session['CONFIRM_TIME'] = now
+
+    logger.info(
+        "IAM MFA session set: user=%s iam_mfa_verified=%s acr=%r amr=%r "
+        "confirm_level=%s",
+        user.username, iam_mfa_verified,
+        claims.get('acr'), claims.get('amr'),
+        mfa_confirm_level,
+    )
+
+
+# ── Views ──────────────────────────────────────────────────────────────────────
+
 class IAMLoginView(View):
+    """
+    Initiates the IAM OIDC Authorization Code + PKCE login flow.
+    Always requests urn:iam:acr:2fa:any (or the configured require_mfa_acr)
+    so that IAM enforces a second factor before issuing the code.
+    """
+
     def get(self, request):
         from grydd_platform.models import IAMConfig
 
@@ -31,56 +115,90 @@ class IAMLoginView(View):
             return JsonResponse(
                 {'error': 'IAM is not configured. '
                           'Add a config via the admin API.'},
-                status=503
+                status=503,
             )
-
         if not iam_config.authorization_endpoint:
             return JsonResponse(
                 {'error': 'IAM endpoints not synced. '
                           'Call /api/v1/grydd_platform/iam/sync/'},
-                status=503
+                status=503,
             )
 
-        code_verifier = generate_code_verifier()
-        code_challenge = generate_code_challenge(code_verifier, iam_config.pkce_method)
-        state = generate_state()
+        next_url = request.GET.get('next', '/ui/')
+        if not next_url or next_url in ('/', '/core/auth/login/', '/core/auth/login'):
+            next_url = '/ui/'
+        request.session['oidc_next'] = next_url
+
+        auth_url, _ = _build_iam_auth_url(request, iam_config)
+        logger.info(
+            "Initiating IAM login: client_id=%s acr_values=%r",
+            iam_config.client_id,
+            iam_config.require_mfa_acr or 'urn:iam:acr:2fa:any',
+        )
+        return HttpResponseRedirect(auth_url)
+
+
+class IAMStepUpView(View):
+    """
+    Action-level MFA re-verification via IAM (step-up authentication).
+
+    Called when JumpServer's UserConfirmation permission gate expires
+    mid-session and the user needs to re-prove their second factor without
+    performing a full re-login.
+
+    Flow:
+      1. This view saves ?next=<url> and redirects to IAM with prompt=login
+         so IAM forces fresh credentials even if the IAM session is still
+         alive.
+      2. IAMCallbackView detects the oidc_stepup_next session key, verifies
+         the 2FA claims, refreshes both MFA session gates, and redirects back
+         to the saved URL — no auth_login() is called because the user is
+         already authenticated in JumpServer.
+    """
+
+    def get(self, request):
+        if request.user.is_anonymous:
+            return HttpResponseRedirect('/core/auth/login/')
+
+        from grydd_platform.models import IAMConfig
+        iam_config = IAMConfig.get_active()
+        if not iam_config or not iam_config.authorization_endpoint:
+            return JsonResponse({'error': 'IAM not configured or synced'}, status=503)
 
         next_url = request.GET.get('next', '/ui/')
         if not next_url or next_url in ('/', '/core/auth/login/', '/core/auth/login'):
             next_url = '/ui/'
 
-        request.session['oidc_code_verifier'] = code_verifier
-        request.session['oidc_state'] = state
-        request.session['oidc_config_id'] = str(iam_config.id)
-        request.session['oidc_next'] = next_url
-        request.session.modified = True
+        # Use a distinct session key so the callback knows this is a step-up,
+        # not a fresh login.
+        request.session['oidc_stepup_next'] = next_url
 
-        params = {
-            'response_type': 'code',
-            'client_id': iam_config.client_id,
-            'redirect_uri': get_redirect_uri(request),
-            'scope': iam_config.scopes,
-            'state': state,
-            'code_challenge': code_challenge,
-            'code_challenge_method': iam_config.pkce_method,
-        }
-
-        # Always request MFA from IAM. Use the configured require_mfa_acr value
-        # if set, otherwise default to urn:iam:acr:2fa:any (any two-factor method).
-        # This ensures every JumpServer login triggers a second factor in IAM.
-        acr_values = iam_config.require_mfa_acr or 'urn:iam:acr:2fa:any'
-        params['acr_values'] = acr_values
-        logger.info(
-            "Requesting IAM MFA via acr_values=%r client_id=%s",
-            acr_values, iam_config.client_id,
+        # prompt=login forces IAM to re-authenticate the user even if an IAM
+        # SSO session is still active, giving us a genuine fresh 2FA challenge.
+        auth_url, _ = _build_iam_auth_url(
+            request, iam_config,
+            extra_params={'prompt': 'login'},
         )
-
-        auth_url = f"{iam_config.authorization_endpoint}?{urlencode(params)}"
-        logger.info("Initiating IAM login client_id=%s", iam_config.client_id)
+        logger.info(
+            "Initiating IAM step-up: user=%s next=%r acr_values=%r",
+            request.user.username, next_url,
+            iam_config.require_mfa_acr or 'urn:iam:acr:2fa:any',
+        )
         return HttpResponseRedirect(auth_url)
 
 
 class IAMCallbackView(View):
+    """
+    Handles the IAM authorization callback for both:
+
+    * Login  — user was anonymous; full auth_login() is called.
+    * Step-up — user was already authenticated; only the MFA/confirm session
+                keys are refreshed (auth_login() is NOT called again).
+
+    The presence of oidc_stepup_next in the session distinguishes step-up
+    from a normal login.
+    """
+
     def get(self, request):
         returned_state = request.GET.get('state')
         stored_state = request.session.get('oidc_state')
@@ -101,10 +219,17 @@ class IAMCallbackView(View):
 
         code_verifier = request.session.get('oidc_code_verifier')
         config_id = request.session.get('oidc_config_id')
-        next_url = request.session.pop('oidc_next', '/ui/')
 
-        if not next_url or next_url in ('/', '/core/auth/login/', '/core/auth/login'):
-            next_url = '/ui/'
+        # Determine mode: step-up (user already logged in) vs normal login
+        stepup_next = request.session.pop('oidc_stepup_next', None)
+        is_stepup = stepup_next is not None
+
+        if is_stepup:
+            next_url = stepup_next
+        else:
+            next_url = request.session.pop('oidc_next', '/ui/')
+            if not next_url or next_url in ('/', '/core/auth/login/', '/core/auth/login'):
+                next_url = '/ui/'
 
         if not code_verifier or not config_id:
             return JsonResponse({'error': 'Missing OIDC session state'}, status=400)
@@ -141,87 +266,52 @@ class IAMCallbackView(View):
             logger.error("Token validation failed: %s", e)
             return JsonResponse({'error': 'Token validation failed'}, status=401)
 
-        from django.contrib.auth import authenticate
-        user = authenticate(request, iam_claims=claims, iam_config=iam_config)
-
-        if user is None:
-            return JsonResponse({'error': 'Authentication failed'}, status=401)
-
-        if not user.is_active:
-            return JsonResponse({'error': 'User account is disabled'}, status=403)
-
-        # ── IAM MFA enforcement ───────────────────────────────────────────────
-        # Inspect ACR/AMR claims to see whether IAM performed a second factor.
+        # ── MFA enforcement (applies to both login and step-up) ───────────────
         iam_mfa_verified = check_iam_mfa_from_claims(claims, iam_config)
-
-        # MFA is always required. If the token does not carry 2FA evidence
-        # (acr=urn:iam:acr:2fa:* or a recognised AMR method), reject the login.
-        # We never fall back to JumpServer's native MFA — IAM is the sole MFA authority.
         if not iam_mfa_verified:
             requested_acr = iam_config.require_mfa_acr or 'urn:iam:acr:2fa:any'
             logger.warning(
-                "IAM MFA not satisfied: acr_values=%r was requested but token "
-                "returned acr=%r amr=%r for user=%s — rejecting login",
-                requested_acr,
-                claims.get('acr'),
-                claims.get('amr'),
-                user.username,
+                "IAM MFA not satisfied: acr_values=%r requested but token "
+                "returned acr=%r amr=%r for step_up=%s — rejecting",
+                requested_acr, claims.get('acr'), claims.get('amr'), is_stepup,
             )
             return JsonResponse(
                 {'error': 'MFA required by IAM policy was not completed'},
                 status=401,
             )
 
-        # Always satisfy JumpServer's MFA gate for IAM-authenticated users,
-        # regardless of whether the token carried 2FA claims.
-        #
-        # MFA is the IAM's responsibility end-to-end. JumpServer's native MFA
-        # backends (OTP, SMS, Email …) must NEVER re-prompt users who arrived
-        # through the IAM OIDC flow.
-        #
-        # How it works: setting auth_mfa=1 in the session BEFORE auth_login()
-        # is called means the post-login signal handler
-        # (on_user_auth_login_success) sees the key already present and skips
-        # setting auth_mfa_required=1. MFAMiddleware therefore never redirects
-        # the user to a JumpServer MFA challenge.
-        from authentication.const import ConfirmType
-        now = int(time.time())
-
-        # ── Login MFA gate (MFAMiddleware / signal handler) ───────────────────
-        request.session['auth_mfa'] = 1
-        request.session['auth_mfa_username'] = user.username
-        request.session['auth_mfa_time'] = now
-        request.session['auth_mfa_required'] = 0
-        request.session['auth_mfa_type'] = 'iam'
-
-        # ── Sensitive-operation confirm gate (UserConfirmation permission) ────
-        # The permission class checks CONFIRM_LEVEL / CONFIRM_TYPE / CONFIRM_TIME
-        # in the session (see authentication/permissions.py:UserConfirmation).
-        # IAM users completed 2FA at the IAM provider — pre-populate these keys
-        # so that operations such as revealing secrets pass immediately without
-        # presenting a JumpServer MFA confirm dialog.
-        mfa_confirm_level = ConfirmType.values.index(ConfirmType.MFA) + 1  # = 3 (highest)
-        request.session['CONFIRM_LEVEL'] = mfa_confirm_level
-        request.session['CONFIRM_TYPE'] = ConfirmType.MFA
-        request.session['CONFIRM_TIME'] = now
-
-        logger.info(
-            "IAM login: user=%s iam_mfa_verified=%s acr=%r amr=%r confirm_level=%s",
-            user.username, iam_mfa_verified, claims.get('acr'), claims.get('amr'),
-            mfa_confirm_level,
-        )
-
         for key in ['oidc_code_verifier', 'oidc_state', 'oidc_config_id']:
             request.session.pop(key, None)
-
         request.session['oidc_id_token_hint'] = id_token
         request.session['oidc_access_token'] = access_token
 
+        # ── Step-up path: refresh session gates, skip re-login ───────────────
+        if is_stepup:
+            if request.user.is_anonymous:
+                logger.warning("Step-up callback reached with anonymous user — aborting")
+                return JsonResponse({'error': 'Session expired, please log in again'}, status=401)
+
+            _set_iam_mfa_session(request, request.user, iam_mfa_verified, claims)
+            logger.info("IAM step-up complete: user=%s next=%r", request.user.username, next_url)
+            return HttpResponseRedirect(next_url)
+
+        # ── Login path: authenticate user and establish Django session ────────
+        from django.contrib.auth import authenticate
+        user = authenticate(request, iam_claims=claims, iam_config=iam_config)
+
+        if user is None:
+            return JsonResponse({'error': 'Authentication failed'}, status=401)
+        if not user.is_active:
+            return JsonResponse({'error': 'User account is disabled'}, status=403)
+
+        # Set both MFA gates BEFORE auth_login() so the post-login signal
+        # sees auth_mfa=1 and does not schedule a JumpServer MFA challenge.
+        _set_iam_mfa_session(request, user, iam_mfa_verified, claims)
+
         auth_login(
             request, user,
-            backend='authentication.backends.grydd_iam.IAMOIDCBackend'
+            backend='authentication.backends.grydd_iam.IAMOIDCBackend',
         )
-
         logger.info("Successful IAM login: user=%s", user.username)
         return HttpResponseRedirect(next_url)
 

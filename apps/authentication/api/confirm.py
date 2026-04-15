@@ -8,6 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.response import Response
 
+from authentication.confirm.mfa import IAM_STEPUP_REQUIRED, IAM_STEPUP_PATH
 from authentication.permissions import UserConfirmation
 from common.api import JMSGenericViewSet
 from common.permissions import IsValidUser
@@ -68,9 +69,21 @@ class UserConfirmationViewSet(JMSGenericViewSet):
 
         backend = self.get_confirm_backend(confirm_type)
         ok, msg = backend.authenticate(secret_key, mfa_type)
+
         if ok:
             request.session['CONFIRM_LEVEL'] = ConfirmType.values.index(confirm_type) + 1
             request.session['CONFIRM_TYPE'] = confirm_type
             request.session['CONFIRM_TIME'] = int(time.time())
             return Response('ok')
+
+        # IAM session has expired — redirect the user to IAM for a fresh 2FA
+        # challenge instead of showing a "wrong code" error.
+        if msg == IAM_STEPUP_REQUIRED:
+            next_url = request.META.get('HTTP_REFERER', '/ui/')
+            stepup_url = f'{IAM_STEPUP_PATH}?next={next_url}'
+            return Response(
+                {'type': 'iam_stepup', 'url': stepup_url},
+                status=status.HTTP_200_OK,
+            )
+
         return Response({'error': msg}, status=400)
