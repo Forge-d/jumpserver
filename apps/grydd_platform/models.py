@@ -30,6 +30,28 @@ class IAMConfig(models.Model):
     pkce_enabled = models.BooleanField(default=True)
     pkce_method = models.CharField(max_length=8, default="S256")
     is_active = models.BooleanField(default=True)
+
+    # ── Role mapping ─────────────────────────────────────────────────────────
+    role_mapping = models.JSONField(
+        default=dict, blank=True,
+        help_text="Override DEFAULT_ROLE_MAPPING. Maps IAM group names to JumpServer role names."
+    )
+
+    # ── MFA / ACR integration ─────────────────────────────────────────────────
+    require_mfa_acr = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text=(
+            "ACR value sent as acr_values in the IAM authorization URL to request MFA. "
+            "Use 'urn:iam:acr:2fa:any' to require any two-factor auth. Leave blank to not request."
+        )
+    )
+    mfa_acr_values = models.JSONField(
+        default=list, blank=True,
+        help_text=(
+            "Extra ACR values (beyond the built-in urn:iam:acr:2fa:* prefix) that confirm MFA. "
+            "Checked against the acr claim in the returned ID token."
+        )
+    )
  
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
