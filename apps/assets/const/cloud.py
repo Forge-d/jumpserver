@@ -7,6 +7,8 @@ class CloudTypes(BaseType):
     PUBLIC = 'public', _('Public cloud')
     PRIVATE = 'private', _('Private cloud')
     K8S = 'k8s', _('Kubernetes')
+    AZURE = 'azure', _('Azure')
+    AWS = 'aws', _('AWS')
 
     @classmethod
     def _get_base_constrains(cls) -> dict:
@@ -51,6 +53,8 @@ class CloudTypes(BaseType):
     def internal_platforms(cls):
         return {
             cls.PUBLIC: [],
+            cls.AZURE: [],
+            cls.AWS: [],
             cls.PRIVATE: [{'name': 'Vmware-vSphere'}],
             cls.K8S: [{'name': 'Kubernetes'}],
         }
@@ -58,5 +62,5 @@ class CloudTypes(BaseType):
     @classmethod
     def get_community_types(cls):
         return [
-            cls.K8S, cls.PUBLIC, cls.PRIVATE
+            cls.K8S, cls.PUBLIC, cls.PRIVATE, cls.AZURE, cls.AWS
         ]
