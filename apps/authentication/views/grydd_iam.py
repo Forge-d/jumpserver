@@ -323,14 +323,19 @@ class IAMLogoutView(View):
         id_token_hint = request.session.get('oidc_id_token_hint')
         request.session.flush()
 
+        # After logout the user is anonymous.  Redirect to the login page,
+        # NOT to '/' — IndexView requires IsValidUser and would loop forever
+        # when LOGIN_URL is set to a path that also requires auth.
+        login_url = request.build_absolute_uri('/core/auth/login/')
+
         iam_config = IAMConfig.get_active()
         if iam_config and iam_config.end_session_endpoint:
             params = {
-                'post_logout_redirect_uri': request.build_absolute_uri('/'),
+                'post_logout_redirect_uri': login_url,
             }
             if id_token_hint:
                 params['id_token_hint'] = id_token_hint
             logout_url = f"{iam_config.end_session_endpoint}?{urlencode(params)}"
             return HttpResponseRedirect(logout_url)
 
-        return HttpResponseRedirect('/')
+        return HttpResponseRedirect('/core/auth/login/')

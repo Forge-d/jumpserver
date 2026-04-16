@@ -5,6 +5,7 @@ import base64
 import hashlib
 import logging
 import os
+import threading
 
 import requests
 from django.contrib.auth import get_user_model
@@ -13,6 +14,31 @@ from authentication.backends.base import JMSModelBackend
 
 logger = logging.getLogger('jumpserver.authentication.iam')
 User = get_user_model()
+
+
+def trigger_iam_backchannel_logout(id_token_hint: str, iam_config) -> None:
+    """
+    Terminate the IAM SSO session server-to-server (backchannel logout).
+
+    Called when a JumpServer user logs out so the IAM provider won't silently
+    re-authenticate them on the very next request.  Runs in a daemon thread so
+    it never blocks the HTTP response.
+    """
+    endpoint = getattr(iam_config, 'end_session_endpoint', None)
+    if not endpoint:
+        return
+
+    def _call():
+        params = {}
+        if id_token_hint:
+            params['id_token_hint'] = id_token_hint
+        try:
+            requests.get(endpoint, params=params, timeout=5, allow_redirects=False)
+            logger.info("IAM backchannel logout: SSO session cleared")
+        except Exception as exc:
+            logger.warning("IAM backchannel logout failed: %s", exc)
+
+    threading.Thread(target=_call, daemon=True).start()
 
 # ── Default Role Mapping ──────────────────────────────────────────────────────
 # Maps Keycloak group names (from 'groups' claim) → JumpServer role names.
