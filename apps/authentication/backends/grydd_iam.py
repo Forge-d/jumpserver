@@ -41,7 +41,7 @@ def trigger_iam_backchannel_logout(id_token_hint: str, iam_config) -> None:
     threading.Thread(target=_call, daemon=True).start()
 
 # ── Default Role Mapping ──────────────────────────────────────────────────────
-# Maps Keycloak group names (from 'groups' claim) → JumpServer role names.
+# Maps group names (from 'groups' claim) → JumpServer role names.
 # Override via IAMConfig.role_mapping in DB (shell or API).
 # Valid JumpServer system roles: SystemAdmin, SystemAuditor, User
 DEFAULT_ROLE_MAPPING = {
