@@ -5,17 +5,43 @@ import base64
 import hashlib
 import logging
 import os
+import threading
 
 import requests
 from django.contrib.auth import get_user_model
 
 from authentication.backends.base import JMSModelBackend
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('jumpserver.authentication.iam')
 User = get_user_model()
 
+
+def trigger_iam_backchannel_logout(id_token_hint: str, iam_config) -> None:
+    """
+    Terminate the IAM SSO session server-to-server (backchannel logout).
+
+    Called when a JumpServer user logs out so the IAM provider won't silently
+    re-authenticate them on the very next request.  Runs in a daemon thread so
+    it never blocks the HTTP response.
+    """
+    endpoint = getattr(iam_config, 'end_session_endpoint', None)
+    if not endpoint:
+        return
+
+    def _call():
+        params = {}
+        if id_token_hint:
+            params['id_token_hint'] = id_token_hint
+        try:
+            requests.get(endpoint, params=params, timeout=5, allow_redirects=False)
+            logger.info("IAM backchannel logout: SSO session cleared")
+        except Exception as exc:
+            logger.warning("IAM backchannel logout failed: %s", exc)
+
+    threading.Thread(target=_call, daemon=True).start()
+
 # ── Default Role Mapping ──────────────────────────────────────────────────────
-# Maps Keycloak group names (from 'groups' claim) → JumpServer role names.
+# Maps group names (from 'groups' claim) → JumpServer role names.
 # Override via IAMConfig.role_mapping in DB (shell or API).
 # Valid JumpServer system roles: SystemAdmin, SystemAuditor, User
 DEFAULT_ROLE_MAPPING = {
@@ -23,6 +49,63 @@ DEFAULT_ROLE_MAPPING = {
     'System_Auditors': 'SystemAuditor',
     'System_Users': 'User',
 }
+
+
+# ── IAM ACR Namespace Constants ───────────────────────────────────────────────
+# urn:iam:acr:<factors>:<method> namespace used by this IAM deployment.
+# Any value starting with this prefix confirms two-factor (MFA) authentication.
+IAM_ACR_2FA_PREFIX = 'urn:iam:acr:2fa:'
+
+# Explicit single-factor ACR values — these are definitively NOT MFA.
+IAM_ACR_1FA_VALUES = {
+    'urn:iam:acr:1fa:any',
+    'urn:iam:acr:1fa:pwd',
+}
+
+# AMR method identifiers that indicate a second authentication factor was used.
+_MFA_AMR_METHODS = {
+    'otp', 'mfa', 'totp', 'hotp', 'sms', 'email',
+    'push', 'u2f', 'fido', 'fido2', 'webauthn', 'kc_otp',
+}
+
+
+def check_iam_mfa_from_claims(claims: dict, iam_config) -> bool:
+    """
+    Return True if the IAM ID token proves MFA (two factors) was performed.
+
+    Evaluation order:
+    1. ACR claim — urn:iam:acr:2fa:* prefix → MFA confirmed (LoA 2 / AAL2).
+                   urn:iam:acr:1fa:* values → single factor only, return False.
+                   iam_config.mfa_acr_values (JSON list) → extra configured values.
+    2. AMR claim — presence of any known second-factor method identifier
+                   (fallback when ACR is absent or unrecognised).
+
+    Never modifies JumpServer's existing MFA backends or session logic — it only
+    informs the IAM callback view whether to pre-populate auth_mfa session keys.
+    """
+    acr = claims.get('acr', '')
+
+    # ── ACR-based check (primary) ─────────────────────────────────────────────
+    if acr:
+        if acr.startswith(IAM_ACR_2FA_PREFIX):
+            # e.g. urn:iam:acr:2fa:any  ←  MFA confirmed
+            return True
+
+        if acr in IAM_ACR_1FA_VALUES:
+            # Explicitly single-factor; skip AMR fallback
+            return False
+
+        # Administrator-configured extra ACR values stored in IAMConfig
+        extra = getattr(iam_config, 'mfa_acr_values', None) or []
+        if acr in extra:
+            return True
+
+    # ── AMR-based fallback ────────────────────────────────────────────────────
+    amr = claims.get('amr', [])
+    if isinstance(amr, list) and _MFA_AMR_METHODS.intersection(set(amr)):
+        return True
+
+    return False
 
 
 # ── PKCE Helpers ──────────────────────────────────────────────────────────────

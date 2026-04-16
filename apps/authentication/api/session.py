@@ -1,4 +1,5 @@
 import time
+from importlib import import_module
 from threading import Thread
 
 from django.conf import settings
@@ -14,6 +15,43 @@ from common.utils import get_logger
 __all__ = ['UserSessionApi']
 
 logger = get_logger(__name__)
+
+
+def _delayed_iam_logout(session_key: str, id_token_hint: str) -> None:
+    """
+    After a browser disconnect (DELETE /user-session/), wait a few seconds to
+    see if the user reconnects (i.e. it was just a page refresh).  If the
+    session counter is still zero after the grace period, the user genuinely
+    logged out: delete the Django session and end the IAM SSO session so the
+    provider cannot silently re-authenticate them.
+    """
+    GRACE = 6  # seconds — same as UserSessionManager.delay_delete_session
+
+    def _run():
+        time.sleep(GRACE)
+
+        if user_session_manager.check_active(session_key):
+            # Someone reconnected — this was a refresh, not a logout.
+            return
+
+        # Delete the Django session directly (no request object available here).
+        try:
+            engine = import_module(settings.SESSION_ENGINE)
+            engine.SessionStore(session_key).delete()
+        except Exception as exc:
+            logger.warning("IAM logout: session delete failed: %s", exc)
+
+        # Terminate the IAM SSO session server-to-server.
+        try:
+            from grydd_platform.models import IAMConfig
+            iam_config = IAMConfig.get_active()
+            if iam_config:
+                from authentication.backends.grydd_iam import trigger_iam_backchannel_logout
+                trigger_iam_backchannel_logout(id_token_hint, iam_config)
+        except Exception as exc:
+            logger.warning("IAM backchannel logout failed: %s", exc)
+
+    Thread(target=_run, daemon=True).start()
 
 
 class UserSessionManager:
@@ -65,4 +103,15 @@ class UserSessionApi(generics.RetrieveDestroyAPIView):
             return Response(status=status.HTTP_403_FORBIDDEN)
 
         UserSessionManager(request).disconnect()
+
+        # For IAM users, schedule a delayed check: if the session is still
+        # inactive after the grace period (i.e. the user didn't just refresh),
+        # delete the Django session and terminate the IAM SSO session so the
+        # provider cannot silently re-authenticate them.
+        if getattr(request.user, 'source', '') == 'grydd-iam':
+            _delayed_iam_logout(
+                session_key=request.session.session_key,
+                id_token_hint=request.session.get('oidc_id_token_hint', ''),
+            )
+
         return Response(status=status.HTTP_200_OK, data={'ok': True})

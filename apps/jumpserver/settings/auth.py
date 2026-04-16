@@ -389,6 +389,7 @@ AUTHENTICATION_BACKENDS = [
     AUTH_BACKEND_SSO,                                          # for component SSO tokens
 ]
 
-# Redirect unauthenticated browser requests to IAM selector
-# instead of the built-in form login page
-LOGIN_URL = '/'
+# Redirect unauthenticated browser requests to IAMLoginRedirectView,
+# which forwards them to IAM.  Never use '/' — IndexView requires auth
+# and would create an infinite redirect loop.
+LOGIN_URL = '/core/auth/login/'

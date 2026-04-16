@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.contrib.auth import user_logged_in, BACKEND_SESSION_KEY
+from django.contrib.auth import user_logged_in, user_logged_out, BACKEND_SESSION_KEY
 from django.core.cache import cache
 from django.dispatch import receiver
 from django_cas_ng.signals import cas_user_authenticated
@@ -59,4 +59,33 @@ def on_user_login_success(sender, request, user, backend, create=False, **kwargs
 def on_user_login_failed(sender, username, request, reason, backend, **kwargs):
     request.session['auth_backend'] = backend
     post_auth_failed.send(sender, username=username, request=request, reason=reason)
+
+
+@receiver(user_logged_out)
+def on_iam_user_logged_out(sender, user, request, **kwargs):
+    """
+    When an IAM-authenticated user logs out, terminate their IAM SSO session
+    via a server-to-server (backchannel) call to the end_session endpoint.
+    Django fires this signal BEFORE flushing the session, so we can still
+    read the id_token_hint and auth_mfa_type keys.
+    """
+    if request is None:
+        return
+    if request.session.get('auth_mfa_type') != 'iam':
+        return
+
+    id_token_hint = request.session.get('oidc_id_token_hint', '')
+
+    try:
+        from grydd_platform.models import IAMConfig
+        iam_config = IAMConfig.get_active()
+        if not iam_config:
+            return
+        from authentication.backends.grydd_iam import trigger_iam_backchannel_logout
+        trigger_iam_backchannel_logout(id_token_hint, iam_config)
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger('jumpserver.authentication.iam').warning(
+            "IAM backchannel logout signal error: %s", exc
+        )
 

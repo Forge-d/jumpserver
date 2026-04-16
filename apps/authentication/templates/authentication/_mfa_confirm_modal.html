@@ -26,11 +26,16 @@ var codeError = "{% trans 'Code error' %}";
 
 $(document).ready(function () {
 }).on("click", ".btn-mfa", function () {
-    var url = "{% url 'api-auth:user-otp-verify' %}";
+    var url = "{% url 'api-auth:confirm-list' %}";
     var data = {
-        code: $("#mfa").val()
+        confirm_type: "mfa",
+        secret_key: $("#mfa").val()
     };
-    var success = function () {
+    var success = function (res) {
+        if (res && res.type === 'iam_stepup') {
+            window.location.href = res.url;
+            return;
+        }
         var now = new Date();
         lastMFATime = now.getTime() / 1000;
         $("#mfa_auth_confirm").modal("hide").trigger("success");
