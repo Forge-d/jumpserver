@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: jumpserver
       POSTGRES_PASSWORD: jms_dev_pass_2024
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - jms_pg_data:/var/lib/postgresql/data
     healthcheck:
