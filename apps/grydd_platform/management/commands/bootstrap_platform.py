@@ -90,6 +90,8 @@ class Command(BaseCommand):
                 admin_email or admin_username
             )
 
+        self._bootstrap_svc_account()
+
     def _sync_endpoints(self, config):
         """Fetch OIDC endpoints from IAM discovery document."""
         if not config.discovery_url:
@@ -196,4 +198,14 @@ class Command(BaseCommand):
         else:
             self.stdout.write(
                 f"  {user.username} already has SystemAdmin role"
+            )
+
+    def _bootstrap_svc_account(self):
+        from django.core import management as mgmt
+        self.stdout.write("Bootstrapping M2M service account...")
+        try:
+            mgmt.call_command('bootstrap_svc_account', stdout=self.stdout)
+        except Exception as e:
+            self.stdout.write(
+                self.style.WARNING(f"  Service account bootstrap failed: {e}")
             )
