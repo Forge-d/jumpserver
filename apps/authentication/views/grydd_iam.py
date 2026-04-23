@@ -2,8 +2,10 @@ import logging
 import time
 from urllib.parse import urlencode
 
+from django.conf import settings
 from django.contrib.auth import login as auth_login
 from django.http import HttpResponseRedirect, JsonResponse
+from django.shortcuts import reverse
 from django.views import View
 
 from authentication.backends.grydd_iam import (
@@ -304,6 +306,49 @@ class IAMCallbackView(View):
         if not user.is_active:
             return JsonResponse({'error': 'User account is disabled'}, status=403)
 
+        # ── Login ACL enforcement ─────────────────────────────────────────────
+        # Must run before auth_login() so rejected/review logins never create
+        # a Django session.
+        from acls.models import LoginACL
+        from common.utils import get_request_ip
+        ip = get_request_ip(request)
+        acl = LoginACL.get_match_rule_acls(user, ip)
+        if acl:
+            if acl.is_action(LoginACL.ActionChoices.reject):
+                logger.warning(
+                    "IAM login blocked by ACL: user=%s ip=%s acl=%s",
+                    user.username, ip, acl.name,
+                )
+                return JsonResponse(
+                    {'error': 'Current login is prohibited by ACL rules'},
+                    status=403,
+                )
+
+            if acl.is_action(LoginACL.ActionChoices.review):
+                # Seed the session so UserLoginGuardView can run the
+                # ticket-based confirmation workflow (same as normal login).
+                request.session['user_id'] = str(user.id)
+                request.session['auth_password'] = 1
+                request.session['auth_password_expired_at'] = (
+                    int(time.time()) + settings.AUTH_EXPIRED_SECONDS
+                )
+                request.session['auth_backend'] = (
+                    'authentication.backends.grydd_iam.IAMOIDCBackend'
+                )
+                request.session['auth_confirm_required'] = '1'
+                request.session['auth_acl_id'] = str(acl.id)
+                _set_iam_mfa_session(request, user, iam_mfa_verified, claims)
+                logger.info(
+                    "IAM login requires ACL review: user=%s acl=%s",
+                    user.username, acl.name,
+                )
+                return HttpResponseRedirect(reverse('authentication:login-guard'))
+
+            if acl.is_action(LoginACL.ActionChoices.notice):
+                request.session['auth_notice_required'] = '1'
+                request.session['auth_acl_id'] = str(acl.id)
+                # Fall through — post_auth_success signal notifies reviewers
+
         # Set both MFA gates BEFORE auth_login() so the post-login signal
         # sees auth_mfa=1 and does not schedule a JumpServer MFA challenge.
         _set_iam_mfa_session(request, user, iam_mfa_verified, claims)
@@ -312,6 +357,12 @@ class IAMCallbackView(View):
             request, user,
             backend='authentication.backends.grydd_iam.IAMOIDCBackend',
         )
+
+        # Fire post_auth_success to create UserLoginLog + UserSession audit
+        # records and, if auth_notice_required is set, notify ACL reviewers.
+        from authentication.signals import post_auth_success
+        post_auth_success.send(sender=IAMCallbackView, user=user, request=request)
+
         logger.info("Successful IAM login: user=%s", user.username)
         return HttpResponseRedirect(next_url)
 
