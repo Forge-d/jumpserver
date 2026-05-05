@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 import os
-import datetime
+from datetime import datetime, timezone
 import shutil
 import sys
 import django
@@ -33,7 +33,7 @@ def find_replays():
                 session_id = '-'.join(name.split('-')[3:]).replace(".gz", "")
                 file_path = os.path.join(root, name)
                 create_ts = os.stat(file_path).st_ctime
-                create_date = datetime.datetime.utcfromtimestamp(create_ts)
+                create_date = datetime.fromtimestamp(create_ts, timezone.utc)
                 replays.append({
                     "id": session_id,
                     "path": file_path,

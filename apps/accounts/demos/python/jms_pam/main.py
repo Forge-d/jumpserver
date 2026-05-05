@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 import requests
@@ -113,7 +113,7 @@ class JumpServerPAM(object):
         return {
             'Accept': 'application/json',
             'X-JMS-ORG': self.org_id,
-            'Date': datetime.utcnow().strftime(gmt_form),
+            'Date': datetime.now(timezone.utc).strftime(gmt_form),
             'X-Source': 'jms-pam'
         }
 

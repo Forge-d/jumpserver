@@ -6,7 +6,7 @@
 
 """
 
-import datetime as dt
+from datetime import datetime as dt, timezone
 from calendar import timegm
 from urllib.parse import urlparse
 
@@ -88,7 +88,7 @@ def _validate_claims(id_token, nonce=None, validate_nonce=True):
     if 'azp' in id_token and id_token['azp'] != settings.AUTH_OPENID_CLIENT_ID:
         raise SuspiciousOperation('Incorrect id_token: azp')
 
-    utc_timestamp = timegm(dt.datetime.utcnow().utctimetuple())
+    utc_timestamp = timegm(dt.datetime.now(timezone.utc).utctimetuple())
     if utc_timestamp > id_token['exp']:
         logger.debug(log_prompt.format('Signature has expired'))
         raise SuspiciousOperation('Signature has expired')

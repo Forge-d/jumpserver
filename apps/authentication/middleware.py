@@ -114,7 +114,7 @@ class ThirdPartyLoginMiddleware(mixins.AuthMixin):
                 user_log_id = self.request.session.get('user_log_id')
                 auth_acl_id = self.request.session.get('auth_acl_id')
                 send_login_info_to_reviewers(user_log_id, auth_acl_id)
-            return response
+        return response
 
 
 class SessionCookieMiddleware(MiddlewareMixin):

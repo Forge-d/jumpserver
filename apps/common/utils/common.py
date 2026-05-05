@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 #
-import datetime
 import ipaddress
 import logging
 import os
@@ -14,6 +13,7 @@ import hashlib
 from collections import OrderedDict
 from functools import wraps, cached_property
 from itertools import chain
+from datetime import datetime, timezone
 
 import html2text
 import psutil
@@ -54,7 +54,7 @@ def timesince(dt, since='', default="just now"):
     """
 
     if not since:
-        since = datetime.datetime.utcnow()
+        since = datetime.now(timezone.utc)
 
     if since is None:
         return default

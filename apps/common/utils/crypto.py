@@ -3,7 +3,7 @@ import logging
 import re
 
 from Cryptodome import Random
-from Cryptodome.Cipher import AES, PKCS1_v1_5
+from Cryptodome.Cipher import AES, PKCS1_OAEP
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Random import get_random_bytes
 from Cryptodome.Util.Padding import pad
@@ -259,27 +259,29 @@ def gen_key_pair(length=2048):
 
 
 def rsa_encrypt(message, rsa_public_key):
-    """ 加密登录密码 """
+    """ Encrypt login password using RSA OAEP (secure) """
     key = RSA.importKey(rsa_public_key)
-    cipher = PKCS1_v1_5.new(key)
+    cipher = PKCS1_OAEP.new(key)
     cipher_text = base64.b64encode(cipher.encrypt(message.encode())).decode()
     return cipher_text
 
 
 def rsa_decrypt(cipher_text, rsa_private_key=None):
-    """ 解密登录密码 """
+    """ Decrypt login password using RSA OAEP (secure) """
     if rsa_private_key is None:
-        # rsa_private_key 为 None，可以能是API请求认证，不需要解密
+        # If no rsa_private_key, likely API auth, no decryption needed
         return cipher_text
 
     key = RSA.importKey(rsa_private_key)
-    cipher = PKCS1_v1_5.new(key)
+    cipher = PKCS1_OAEP.new(key)
     cipher_decoded = base64.b64decode(cipher_text.encode())
-    # Todo: 弄明白为何要以下这么写，https://xbuba.com/questions/57035263
-    if len(cipher_decoded) == 127:
-        hex_fixed = '00' + cipher_decoded.hex()
-        cipher_decoded = base64.b16decode(hex_fixed.upper())
-    message = cipher.decrypt(cipher_decoded, b'error').decode()
+    # Previously handled a PKCS1_v1_5 padding edge case (127-byte issue).
+    # Not needed with OAEP, which handles padding correctly and securely.
+    # TODO: Figure out why the following is implemented this way: https://xbuba.com/questions/57035263
+    # if len(cipher_decoded) == 127:
+    #     hex_fixed = '00' + cipher_decoded.hex()
+    #     cipher_decoded = base64.b16decode(hex_fixed.upper())
+    message = cipher.decrypt(cipher_decoded).decode()
     return message
 
 

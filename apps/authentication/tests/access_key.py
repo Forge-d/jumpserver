@@ -1,6 +1,6 @@
 # Python 示例
 # pip install requests drf-httpsig
-import datetime
+from datetime import datetime, timezone
 import json
 
 import requests
@@ -19,7 +19,7 @@ def get_user_info(jms_url, auth):
     headers = {
         'Accept': 'application/json',
         'X-JMS-ORG': '00000000-0000-0000-0000-000000000002',
-        'Date': datetime.datetime.utcnow().strftime(gmt_form)
+        'Date': datetime.now(timezone.utc).strftime(gmt_form)
     }
 
     response = requests.get(url, auth=auth, headers=headers)

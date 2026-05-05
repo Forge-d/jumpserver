@@ -2,7 +2,7 @@
 
 import requests
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from httpsig.requests_auth import HTTPSignatureAuth
 
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8080")
@@ -24,7 +24,7 @@ class APIClient:
         headers = {
             'Accept': 'application/json',
             'X-JMS-ORG': ORG_ID,
-            'Date': datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT'),
+            'Date': datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S GMT'),
             'X-Source': 'jms-pam'
         }
         params = {"asset": asset, "account": account}
