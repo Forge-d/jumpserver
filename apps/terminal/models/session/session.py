@@ -111,7 +111,7 @@ class Session(OrgModelMixin):
             try:
                 if storage.exists(rel_path):
                     return rel_path
-            except:
+            except Exception:
                 pass
 
     @property

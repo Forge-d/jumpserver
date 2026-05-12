@@ -353,7 +353,7 @@ class AllTypes(ChoicesMixin):
 
         try:
             automation = platform.automation
-        except:
+        except AttributeError:
             automation = None
 
         if not automation:

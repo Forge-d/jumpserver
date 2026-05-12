@@ -34,9 +34,6 @@ class NodeQuerySet(models.QuerySet):
 
 
 class FamilyMixin:
-    __parents = None
-    __children = None
-    __all_children = None
     is_node = True
     child_mark: int
 

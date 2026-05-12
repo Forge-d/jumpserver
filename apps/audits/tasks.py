@@ -171,6 +171,6 @@ def upload_ftp_file_to_external_storage(ftp_log_id, file_name):
         return
     try:
         default_storage.delete(local_path)
-    except:
+    except Exception:
         pass
     return

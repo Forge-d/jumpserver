@@ -49,7 +49,7 @@ class MultiObjectStorage(ObjectStorage):
                     success = True
                     msg = ''
                     break
-            except:
+            except Exception:
                 pass
         return success, msg
 
@@ -63,7 +63,7 @@ class MultiObjectStorage(ObjectStorage):
                     ok, msg = storage.delete(path)
                     if not ok:
                         success = False
-            except:
+            except Exception:
                 pass
         return success, msg
 
@@ -72,6 +72,6 @@ class MultiObjectStorage(ObjectStorage):
             try:
                 if storage.exists(path):
                     return True
-            except:
+            except Exception:
                 pass
         return False

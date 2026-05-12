@@ -5,7 +5,7 @@ import sys
 if __name__ == "__main__":
     try:
         os.makedirs('../data/logs')
-    except:
+    except Exception:
         pass
 
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "jumpserver.settings")

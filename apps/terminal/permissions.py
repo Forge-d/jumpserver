@@ -21,5 +21,5 @@ class IsSessionAssignee(permissions.IsAuthenticated):
     def has_object_permission(self, request, view, obj):
         try:
             return obj.ticket_relation.first().ticket.has_all_assignee(request.user)
-        except:
+        except Exception:
             return False

@@ -84,7 +84,7 @@ def CASCADE_SIGNAL_SKIP(collector, field, sub_objs, using):
     try:
         for obj in sub_objs:
             setattr(obj, OP_LOG_SKIP_SIGNAL, True)
-    except:
+    except Exception:
         pass
 
     CASCADE(collector, field, sub_objs, using)

@@ -92,14 +92,14 @@ class FTPStorage(ObjectStorage):
                 try:
                     self.client.cwd(d)
                     continue
-                except:
+                except Exception:
                     pass
                 # 切换失败创建这个目录，再切换
                 try:
                     self.client.mkd(d)
                     self.client.cwd(d)
-                except:
-                    return False
+                except Exception as e:
+                    return False, e
             return True
         finally:
             self.client.cwd(pwd)
@@ -109,7 +109,7 @@ class FTPStorage(ObjectStorage):
         try:
             self.client.size(target)
             return True
-        except:
+        except Exception:
             return False
 
     def close(self):

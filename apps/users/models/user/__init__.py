@@ -174,7 +174,7 @@ class User(
     def receive_backends(self):
         try:
             return self.user_msg_subscription.receive_backends
-        except:
+        except Exception:
             return []
 
     @property

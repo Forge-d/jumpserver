@@ -234,7 +234,7 @@ class RedisChannelLayer(_RedisChannelLayer):
             # 部分云厂商的 Redis 此操作会报错(不支持，比如阿里云有限制)
             try:
                 await connection.eval(cleanup_script, keys=[], args=[channel, backup_queue])
-            except:
+            except Exception:
                 pass
             result = await connection.bzpopmin(channel, timeout=timeout)
 

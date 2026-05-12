@@ -51,7 +51,7 @@ def auto_generate_terminal_host_key(sender, **kwargs):
         private_key, public_key = ssh_key_gen()
         value = json.dumps(private_key)
         Setting.objects.create(name='TERMINAL_HOST_KEY', value=value)
-    except:
+    except Exception:
         pass
 
 

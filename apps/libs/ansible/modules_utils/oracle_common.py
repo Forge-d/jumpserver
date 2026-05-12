@@ -94,5 +94,5 @@ class OracleClient(object):
                 self._cursor.close()
             if self._conn:
                 self._conn.close()
-        except:
+        except Exception:
             pass

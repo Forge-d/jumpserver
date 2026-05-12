@@ -101,8 +101,8 @@ class SFTPStorage(ObjectStorage):
         try:
             self.sftp.stat(target)
             return True
-        except:
-            return False
+        except Exception as e:
+            return False, e
 
     def close(self):
         self.sftp.close()

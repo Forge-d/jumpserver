@@ -24,7 +24,7 @@ ns = Node.objects.all()
 for i in ns:
     try:
         pkey = i.parent.key
-    except:
+    except Exception:
         pkey = ''
     if i.parent_key != pkey and not i.key.isdigit():
         print("Node parent not found: {} -> {}".format(i.key, i.parent_key))

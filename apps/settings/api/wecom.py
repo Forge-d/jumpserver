@@ -38,6 +38,6 @@ class WeComTestingAPI(GenericAPIView):
         except APIException as e:
             try:
                 error = e.detail['errmsg']
-            except:
+            except Exception:
                 error = e.detail
             return Response(status=status.HTTP_400_BAD_REQUEST, data={'error': error})

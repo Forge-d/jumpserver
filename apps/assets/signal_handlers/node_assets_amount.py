@@ -62,7 +62,7 @@ def set_assets_size_to_setting(sender, **kwargs):
     try:
         with tmp_to_root_org():
             amount = Asset.objects.order_by().count()
-    except:
+    except Exception:
         amount = 0
 
     if amount > 20000:

@@ -14,7 +14,7 @@ def get_storage_data(s):
         value = signer.unsign(value)
     try:
         value = json.loads(value)
-    except:
+    except Exception:
         value = {}
     return value
 

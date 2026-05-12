@@ -203,7 +203,7 @@ class AuthMixin:
             return ""
         try:
             return self.public_key_obj.hash_md5()
-        except:
+        except Exception:
             return ""
 
     def reset_password(self, new_password):

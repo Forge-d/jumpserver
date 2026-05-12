@@ -120,7 +120,7 @@ class Message(CustomMsgTemplateBase, metaclass=MessageType):
                 client.send_msg(users, **msg)
             except NotImplementedError:
                 continue
-            except:
+            except Exception:
                 traceback.print_exc()
 
     @classmethod

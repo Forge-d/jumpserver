@@ -48,7 +48,7 @@ class CommandStore(CommandBase):
                 self.model.objects.bulk_create(_commands)
         except OperationalError:
             error = True
-        except:
+        except Exception:
             return False
 
         if not error:

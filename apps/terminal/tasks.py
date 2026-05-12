@@ -93,7 +93,7 @@ def upload_session_replay_to_external_storage(session_id):
 
     try:
         default_storage.delete(local_path)
-    except:
+    except Exception:
         pass
     return
 
@@ -113,7 +113,7 @@ def upload_session_replay_file_to_external_storage(session_id, local_path, remot
 
     try:
         default_storage.delete(local_path)
-    except:
+    except Exception:
         pass
     return
 

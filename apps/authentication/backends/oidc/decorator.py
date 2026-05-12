@@ -49,7 +49,7 @@ def no_ssl_verification():
         for adapter in opened_adapters:
             try:
                 adapter.close()
-            except:
+            except Exception:
                 pass
 
 

@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 try:
     fido2.features.webauthn_json_mapping.enabled = True
-except:
+except Exception:
     pass
 
 
