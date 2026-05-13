@@ -318,13 +318,12 @@ class AssetSerializer(BulkOrgResourceModelSerializer, ResourceLabelsMixin, Writa
 
     def validate_platform(self, platform_data):
         check_models = {Host, Device, Database, Cloud, Web, Custom}
-        if self.Meta.model not in check_models:
-            return platform_data
-        model_name = self.Meta.model.__name__.lower()
-        if model_name != platform_data.category:
-            raise serializers.ValidationError({
-                'platform': f"Platform does not match: {platform_data.name}"
-            })
+        if self.Meta.model in check_models:
+            model_name = self.Meta.model.__name__.lower()
+            if model_name != platform_data.category:
+                raise serializers.ValidationError({
+                    'platform': f"Platform does not match: {platform_data.name}"
+                })
         return platform_data
 
     @staticmethod

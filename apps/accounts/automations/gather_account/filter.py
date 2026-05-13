@@ -34,23 +34,96 @@ def parse_int(value, default=None):
     if isinstance(value, int):
         return value
     if isinstance(value, (bytes, bytearray)):
-        return int.from_bytes(value, byteorder="little", signed=False) if value else default
+        return _parse_int_from_bytes(value, default)
     if isinstance(value, str):
-        text = value.strip()
-        if not text or text.lower() in {"none", "null"}:
-            return default
-        if text.startswith(("b'", 'b"')):
-            try:
-                maybe_bytes = literal_eval(text)
-                if isinstance(maybe_bytes, (bytes, bytearray)):
-                    return int.from_bytes(maybe_bytes, byteorder="little", signed=False) if maybe_bytes else default
-            except (ValueError, SyntaxError):
-                return default
-        try:
-            return int(text)
-        except ValueError:
-            return default
+        return _parse_int_from_text(value, default)
     return default
+
+
+def _parse_int_from_bytes(value, default=None):
+    return int.from_bytes(value, byteorder="little", signed=False) if value else default
+
+
+def _parse_int_from_text(text, default=None):
+    text = text.strip()
+    if not text or text.lower() in {"none", "null"}:
+        return default
+    if text.startswith(("b'", 'b"')):
+        return _parse_int_from_bytes_literal(text, default)
+    try:
+        return int(text)
+    except ValueError:
+        return default
+
+
+def _parse_int_from_bytes_literal(text, default=None):
+    try:
+        maybe_bytes = literal_eval(text)
+    except (ValueError, SyntaxError):
+        return default
+    if isinstance(maybe_bytes, (bytes, bytearray)):
+        return _parse_int_from_bytes(maybe_bytes, default)
+    return default
+
+
+def _parse_posix_colon_lines(lines, skip_blank_value=False, split_value=False):
+    result = {}
+    for line in lines:
+        if ':' not in line:
+            continue
+        username, value = line.split(':', 1)
+        value = value.strip()
+        if skip_blank_value and not value:
+            continue
+        result[username.strip()] = value.split() if split_value else value
+    return result
+
+
+def _parse_posix_last_login(lines):
+    result = {}
+    for line in lines:
+        if not line.strip() or ' ' not in line:
+            continue
+        username, login = line.split(' ', 1)
+        result[username] = login.split()
+    return result
+
+
+def _set_posix_last_login(user, login):
+    if not login or len(login) != 3:
+        return
+    user['address_last_login'] = login[0][:32]
+    try:
+        login_date = timezone.datetime.fromisoformat(login[1])
+        user['date_last_login'] = login_date
+    except ValueError:
+        return
+
+
+def _set_posix_password_dates(user, password_date):
+    if not password_date or len(password_date) != 2:
+        return
+    start_date = timezone.make_aware(timezone.datetime(1970, 1, 1))
+    if password_date[0]:
+        user['date_password_change'] = start_date + timezone.timedelta(days=int(password_date[0]))
+    if password_date[1]:
+        user['date_password_expired'] = start_date + timezone.timedelta(days=int(password_date[1]))
+
+
+def _build_posix_user(
+    username, username_groups, username_sudo, username_authorized,
+    user_last_login, username_password_date,
+):
+    user = {}
+    _set_posix_last_login(user, user_last_login.get(username) or '')
+    _set_posix_password_dates(user, username_password_date.get(username) or '')
+    detail = {
+        'groups': username_groups.get(username) or '',
+        'sudoers': username_sudo.get(username) or '',
+        'authorized_keys': username_authorized.get(username) or ''
+    }
+    user['detail'] = detail
+    return user
 
 
 class GatherAccountsFilter:
@@ -145,47 +218,11 @@ class GatherAccountsFilter:
 
     @staticmethod
     def posix_filter(info):
-        user_groups = info.pop('user_groups', [])
-        username_groups = {}
-        for line in user_groups:
-            if ':' not in line:
-                continue
-            username, groups = line.split(':', 1)
-            username_groups[username.strip()] = groups.strip()
-
-        user_sudo = info.pop('user_sudo', [])
-        username_sudo = {}
-        for line in user_sudo:
-            if ':' not in line:
-                continue
-            username, sudo = line.split(':', 1)
-            if not sudo.strip():
-                continue
-            username_sudo[username.strip()] = sudo.strip()
-
-        last_login = info.pop('last_login', '')
-        user_last_login = {}
-        for line in last_login:
-            if not line.strip() or ' ' not in line:
-                continue
-            username, login = line.split(' ', 1)
-            user_last_login[username] = login.split()
-
-        user_authorized = info.pop('user_authorized', [])
-        username_authorized = {}
-        for line in user_authorized:
-            if ':' not in line:
-                continue
-            username, authorized = line.split(':', 1)
-            username_authorized[username.strip()] = authorized.strip()
-
-        passwd_date = info.pop('passwd_date', [])
-        username_password_date = {}
-        for line in passwd_date:
-            if ':' not in line:
-                continue
-            username, password_date = line.split(':', 1)
-            username_password_date[username.strip()] = password_date.strip().split()
+        username_groups = _parse_posix_colon_lines(info.pop('user_groups', []))
+        username_sudo = _parse_posix_colon_lines(info.pop('user_sudo', []), skip_blank_value=True)
+        user_last_login = _parse_posix_last_login(info.pop('last_login', ''))
+        username_authorized = _parse_posix_colon_lines(info.pop('user_authorized', []))
+        username_password_date = _parse_posix_colon_lines(info.pop('passwd_date', []), split_value=True)
 
         result = {}
         users = info.pop('users', '')
@@ -193,31 +230,14 @@ class GatherAccountsFilter:
         for username in users:
             if not username:
                 continue
-            user = dict()
-
-            login = user_last_login.get(username) or ''
-            if login and len(login) == 3:
-                user['address_last_login'] = login[0][:32]
-                try:
-                    login_date = timezone.datetime.fromisoformat(login[1])
-                    user['date_last_login'] = login_date
-                except ValueError:
-                    pass
-
-            start_date = timezone.make_aware(timezone.datetime(1970, 1, 1))
-            _password_date = username_password_date.get(username) or ''
-            if _password_date and len(_password_date) == 2:
-                if _password_date[0]:
-                    user['date_password_change'] = start_date + timezone.timedelta(days=int(_password_date[0]))
-                if _password_date[1]:
-                    user['date_password_expired'] = start_date + timezone.timedelta(days=int(_password_date[1]))
-            detail = {
-                'groups': username_groups.get(username) or '',
-                'sudoers': username_sudo.get(username) or '',
-                'authorized_keys': username_authorized.get(username) or ''
-            }
-            user['detail'] = detail
-            result[username] = user
+            result[username] = _build_posix_user(
+                username,
+                username_groups,
+                username_sudo,
+                username_authorized,
+                user_last_login,
+                username_password_date,
+            )
         return result
 
     @staticmethod

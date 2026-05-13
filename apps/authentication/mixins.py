@@ -134,6 +134,36 @@ def _get_backends(return_tuples=False):
 auth._get_backends = _get_backends
 
 
+def _backend_accepts_credentials(backend, request, credentials):
+    backend_signature = inspect.signature(backend.authenticate)
+    try:
+        backend_signature.bind(request, **credentials)
+    except TypeError:
+        return False
+    return True
+
+
+def _set_only_allow_exist_user_error(request):
+    if request:
+        request.error_message = _(
+            '''The administrator has enabled "Only allow existing users to log in", 
+            and the current user is not in the user list. Please contact the administrator.'''
+        )
+
+
+def _set_invalid_user_error(request):
+    if request:
+        request.error_message = _('User is invalid')
+
+
+def _set_only_allow_login_from_source_error(request, temp_user):
+    if request:
+        request.error_message = _(
+            ''' The administrator has enabled 'Only allow login from user source'. 
+            The current user source is {}. Please contact the administrator. '''
+        ).format(temp_user.source_display)
+
+
 @_authenticate_context
 def authenticate(request=None, **credentials):
     """
@@ -147,12 +177,7 @@ def authenticate(request=None, **credentials):
         if not backend.username_allow_authenticate(username):
             continue
 
-        # 原生
-        backend_signature = inspect.signature(backend.authenticate)
-        try:
-            backend_signature.bind(request, **credentials)
-        except TypeError:
-            # This backend doesn't accept these credentials as arguments. Try the next one.
+        if not _backend_accepts_credentials(backend, request, credentials):
             continue
         
         try:
@@ -161,11 +186,7 @@ def authenticate(request=None, **credentials):
             # This backend says to stop in our tracks - this user should not be allowed in at all.
             break
         except OnlyAllowExistUserAuthError:
-            if request:
-                request.error_message = _(
-                    '''The administrator has enabled "Only allow existing users to log in", 
-                    and the current user is not in the user list. Please contact the administrator.'''
-                )
+            _set_only_allow_exist_user_error(request)
             continue
         
         if user is None:
@@ -174,8 +195,7 @@ def authenticate(request=None, **credentials):
         if not user.is_valid:
             temp_user = user
             temp_user.backend = backend_path
-            if request:
-                request.error_message = _('User is invalid')
+            _set_invalid_user_error(request)
             return temp_user
 
         # 检查用户是否允许认证
@@ -189,12 +209,7 @@ def authenticate(request=None, **credentials):
         return user
     else:
         if temp_user is not None:
-            source_display = temp_user.source_display
-            if request:
-                request.error_message = _(
-                    ''' The administrator has enabled 'Only allow login from user source'. 
-                    The current user source is {}. Please contact the administrator. '''
-                ).format(source_display)
+            _set_only_allow_login_from_source_error(request, temp_user)
             return temp_user
 
     # The credentials supplied are invalid to all backends, fire signal

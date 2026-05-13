@@ -200,9 +200,7 @@ class IAMOIDCBackend(JMSModelBackend):
         return self._get_or_create_user(iam_claims, iam_config)
 
     def _get_or_create_user(self, claims: dict, iam_config):
-        username = claims.get(iam_config.claim_username)
-        email = claims.get(iam_config.claim_email, '')
-        name = claims.get(iam_config.claim_name, username)
+        username, email, name = self._get_claim_user_details(claims, iam_config)
 
         if not username:
             logger.error(
@@ -211,20 +209,12 @@ class IAMOIDCBackend(JMSModelBackend):
             )
             return None
 
-         # Simple username — no tenant namespace needed
+        # Simple username — no tenant namespace needed
         user = User.objects.filter(username=username).first()
 
         if user:
             # Sync mutable fields on every login
-            changed = False
-            if email and user.email != email:
-                user.email = email
-                changed = True
-            if name and user.name != name:
-                user.name = name
-                changed = True
-            if changed:
-                user.save(update_fields=['email', 'name'])
+            user = self._sync_existing_user(user, email, name)
 
         else:
             # Step 2: check if email already exists
@@ -233,29 +223,58 @@ class IAMOIDCBackend(JMSModelBackend):
             )
 
             if existing_by_email:
-                existing_by_email.username = username
-                existing_by_email.is_active = True
-                existing_by_email.source = 'grydd-iam'
-                existing_by_email.save(
-                    update_fields=['username', 'is_active', 'source']
-                )
-                user = existing_by_email
+                user = self._adopt_existing_user(existing_by_email, username)
 
             else:
-                
-                user = User(
-                    username=username,
-                    email=email,
-                    name=name or username,
-                    is_active=True,
-                    source='grydd-iam',
-                )
-                user.set_unusable_password()
-                user.save()
+                user = self._create_user(username, email, name)
 
         # Sync roles from token on every login
         self._sync_roles(user, claims, iam_config)
 
+        return user
+
+    @staticmethod
+    def _get_claim_user_details(claims: dict, iam_config):
+        username = claims.get(iam_config.claim_username)
+        email = claims.get(iam_config.claim_email, '')
+        name = claims.get(iam_config.claim_name, username)
+        return username, email, name
+
+    @staticmethod
+    def _sync_existing_user(user, email, name):
+        changed = False
+        if email and user.email != email:
+            user.email = email
+            changed = True
+        if name and user.name != name:
+            user.name = name
+            changed = True
+        if changed:
+            user.save(update_fields=['email', 'name'])
+        return user
+
+
+    @staticmethod
+    def _adopt_existing_user(existing_by_email, username):
+        existing_by_email.username = username
+        existing_by_email.is_active = True
+        existing_by_email.source = 'grydd-iam'
+        existing_by_email.save(
+            update_fields=['username', 'is_active', 'source']
+        )
+        return existing_by_email
+
+    @staticmethod
+    def _create_user(username, email, name):
+        user = User(
+            username=username,
+            email=email,
+            name=name or username,
+            is_active=True,
+            source='grydd-iam',
+        )
+        user.set_unusable_password()
+        user.save()
         return user   
     
 

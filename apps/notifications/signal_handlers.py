@@ -49,38 +49,49 @@ def create_system_messages(app_config: AppConfig, **kwargs):
         notifications_module = import_module('.notifications', app_config.module.__package__)
 
         for name, obj in notifications_module.__dict__.items():
-            if name.startswith('_'):
+            if _should_skip_obj(name, obj):
                 continue
 
-            if not inspect.isclass(obj):
-                continue
-
-            if not issubclass(obj, SystemMessage):
-                continue
-
-            attrs = obj.__dict__
-            if 'message_type_label' not in attrs:
-                continue
-
-            if 'category' not in attrs:
-                continue
-
-            if 'category_label' not in attrs:
-                continue
-
-            message_type = obj.get_message_type()
-            sub, created = SystemMsgSubscription.objects.get_or_create(message_type=message_type)
-            if not created:
+            should_stop = _process_system_message(obj, app_config)
+            if should_stop:
                 return
 
-            try:
-                obj.post_insert_to_db(sub)
-                logger.info(f'Create MsgSubscription: package={app_config.module.__package__} type={message_type}')
-            except:
-                pass
     except ModuleNotFoundError:
         pass
 
+def _should_skip_obj(name, obj):
+    if name.startswith('_'):
+        return True
+    if not inspect.isclass(obj):
+        return True
+    if not issubclass(obj, SystemMessage):
+        return True
+
+    attrs = obj.__dict__
+    return not (
+        'message_type_label' in attrs and
+        'category' in attrs and
+        'category_label' in attrs
+    )
+
+def _process_system_message(obj, app_config):
+    message_type = obj.get_message_type()
+    sub, created = SystemMsgSubscription.objects.get_or_create(
+        message_type=message_type
+    )
+
+    if not created:
+        return True  # signal to stop outer function
+
+    try:
+        obj.post_insert_to_db(sub)
+        logger.info(
+            f'Create MsgSubscription: package={app_config.module.__package__} type={message_type}'
+        )
+    except Exception:
+        pass
+
+    return False
 
 @receiver(post_save, sender=User)
 def on_user_post_save(sender, instance, created, **kwargs):

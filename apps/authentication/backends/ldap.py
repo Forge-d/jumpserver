@@ -217,29 +217,45 @@ class LDAPUser(_LDAPUser):
 
         return user_dn
 
+    @staticmethod
+    def _should_skip_user_attr_field(field):
+        return field in ['groups']
+
+    def _get_mapped_user_attr_value(self, field, attr):
+        value = self.attrs[attr][0]
+        value = value.strip()
+        if field != 'is_active':
+            return value
+        if attr.lower() == 'useraccountcontrol' and value:
+            return int(value) & LDAP_AD_ACCOUNT_DISABLE != LDAP_AD_ACCOUNT_DISABLE
+        return is_true(value)
+
+    @staticmethod
+    def _normalize_bool_user_field_value(value):
+        if isinstance(value, str):
+            value = value.lower()
+        return value in ['true', '1', True]
+
+    def _set_user_attribute_value(self, field, value):
+        if not hasattr(self._user, field):
+            return False
+        if isinstance(getattr(self._user, field), bool):
+            value = self._normalize_bool_user_field_value(value)
+        setattr(self._user, field, value)
+        return True
+
     def _populate_user_from_attributes(self):
         for field, attr in self.settings.USER_ATTR_MAP.items():
-            if field in ['groups']:
+            if self._should_skip_user_attr_field(field):
                 continue
             try:
-                value = self.attrs[attr][0]
-                value = value.strip()
-                if field == 'is_active':
-                    if attr.lower() == 'useraccountcontrol' and value:
-                        value = int(value) & LDAP_AD_ACCOUNT_DISABLE != LDAP_AD_ACCOUNT_DISABLE
-                    else:
-                        value = is_true(value)
+                value = self._get_mapped_user_attr_value(field, attr)
             except LookupError:
                 logger.warning(
                     "{} does not have a value for the attribute {}".format(self.dn, attr))
             else:
-                if not hasattr(self._user, field):
+                if not self._set_user_attribute_value(field, value):
                     continue
-                if isinstance(getattr(self._user, field), bool):
-                    if isinstance(value, str):
-                        value = value.lower()
-                    value = value in ['true', '1', True]
-                setattr(self._user, field, value)
 
         email = getattr(self._user, 'email', '')
         email = construct_user_email(self._user.username, email)

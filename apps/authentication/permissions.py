@@ -17,23 +17,26 @@ class UserConfirmation(permissions.BasePermission):
     min_type = 'relogin'
 
     def has_permission(self, request, view):
-        if not settings.SECURITY_VIEW_AUTH_NEED_MFA:
-            return True
+        if settings.SECURITY_VIEW_AUTH_NEED_MFA:
 
-        session = getattr(request, 'session', {})
-        confirm_level = session.get('CONFIRM_LEVEL')
-        confirm_type = session.get('CONFIRM_TYPE')
-        confirm_time = session.get('CONFIRM_TIME')
+            session = getattr(request, 'session', {})
+            confirm_level = session.get('CONFIRM_LEVEL')
+            confirm_type = session.get('CONFIRM_TYPE')
+            confirm_time = session.get('CONFIRM_TIME')
 
-        ttl = self.get_ttl(confirm_type)
-        now = int(time.time())
+            ttl = self.get_ttl(confirm_type)
+            now = int(time.time())
 
-        if not confirm_level or not confirm_time:
-            raise UserConfirmRequired(code=self.min_type)
+            is_invalid = (
+                not confirm_level or
+                not confirm_time or
+                confirm_level < self.min_level or
+                confirm_time < now - ttl
+            )
 
-        if confirm_level < self.min_level or \
-                confirm_time < now - ttl:
-            raise UserConfirmRequired(code=self.min_type)
+            if is_invalid:
+                raise UserConfirmRequired(code=self.min_type)
+
         return True
 
     def get_ttl(self, confirm_type):

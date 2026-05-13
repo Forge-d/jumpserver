@@ -11,7 +11,6 @@ from accounts.const import AutomationTypes, ChangeSecretRecordStatusChoice
 from accounts.models import ChangeSecretAutomation, AutomationExecution, ChangeSecretRecord
 from assets.models import Node, Asset
 from common.const import Status
-from common.permissions import IsValidLicense
 from common.utils import lazyproperty
 from common.utils.timezone import local_zero_hour, local_now
 from ops.celery import app
@@ -25,7 +24,7 @@ class ChangeSecretDashboardApi(APIView):
     rbac_perms = {
         'GET': 'accounts.view_changesecretautomation',
     }
-    permission_classes = [RBACPermission, IsValidLicense]
+    permission_classes = [RBACPermission]
     tp = AutomationTypes.change_secret
     task_name = 'accounts.tasks.automation.execute_account_automation_task'
     ongoing_change_secret_cache_key = "ongoing_change_secret_cache_key"
@@ -125,62 +124,85 @@ class ChangeSecretDashboardApi(APIView):
 
         _all = query_params.get('all')
 
-        if _all or query_params.get('total_count_change_secrets'):
+        def should_include(param):
+            return _all or query_params.get(param)
+
+        if should_include('total_count_change_secrets'):
             data['total_count_change_secrets'] = self.get_filtered_counts(
                 self.change_secrets_queryset
             )
 
-        if _all or query_params.get('total_count_periodic_change_secrets'):
+        if should_include('total_count_periodic_change_secrets'):
             data['total_count_periodic_change_secrets'] = self.get_filtered_counts(
                 self.change_secrets_queryset.filter(is_periodic=True)
             )
 
-        if _all or query_params.get('total_count_change_secret_assets'):
+        if should_include('total_count_change_secret_assets'):
             data['total_count_change_secret_assets'] = self.get_change_secret_asset_queryset().count()
 
-        if _all or query_params.get('total_count_change_secret_status'):
-            executions = self.get_queryset_date_filter(AutomationExecution.objects.all(), 'date_start')
-            data.update(self.get_status_counts(executions))
+        if should_include('total_count_change_secret_status'):
+            data.update(self._get_status_counts())
 
-        if _all or query_params.get('daily_success_and_failure_metrics'):
-            success, failed = self.get_daily_success_and_failure_metrics()
-            data.update({
-                'dates_metrics_date': [date.strftime('%m-%d') for date in self.date_range_list] or ['0'],
-                'dates_metrics_total_count_success': success,
-                'dates_metrics_total_count_failed': failed,
-            })
+        if should_include('daily_success_and_failure_metrics'):
+            data.update(self._get_daily_metrics())
 
-        if _all or query_params.get('total_count_ongoing_change_secret'):
-            ongoing_counts = cache.get(self.ongoing_change_secret_cache_key)
-            if ongoing_counts is None:
-                execution_ids = []
-                inspect = app.control.inspect()
-                try:
-                    active_tasks = inspect.active()
-                except Exception:
-                    active_tasks = None
-                if active_tasks:
-                    for tasks in active_tasks.values():
-                        for task in tasks:
-                            _id = task.get('id')
-                            name = task.get('name')
-                            tp = task.get('kwargs', {}).get('tp')
-                            if name == self.task_name and tp == self.tp:
-                                execution_ids.append(_id)
-
-                snapshots = AutomationExecution.objects.filter(id__in=execution_ids).values_list('snapshot', flat=True)
-
-                asset_ids = {asset for i in snapshots for asset in i.get('assets', [])}
-                account_ids = {account for i in snapshots for account in i.get('accounts', [])}
-
-                ongoing_counts = (len(execution_ids), len(asset_ids), len(account_ids))
-                data['total_count_ongoing_change_secret'] = ongoing_counts[0]
-                data['total_count_ongoing_change_secret_assets'] = ongoing_counts[1]
-                data['total_count_ongoing_change_secret_accounts'] = ongoing_counts[2]
-                cache.set(self.ongoing_change_secret_cache_key, ongoing_counts, 60)
-            else:
-                data['total_count_ongoing_change_secret'] = ongoing_counts[0]
-                data['total_count_ongoing_change_secret_assets'] = ongoing_counts[1]
-                data['total_count_ongoing_change_secret_accounts'] = ongoing_counts[2]
+        if should_include('total_count_ongoing_change_secret'):
+            data.update(self._get_ongoing_counts())
 
         return JsonResponse(data, status=200)
+
+    def _get_status_counts(self):
+        executions = self.get_queryset_date_filter(AutomationExecution.objects.all(), 'date_start')
+        return self.get_status_counts(executions)
+
+    def _get_daily_metrics(self):
+        success, failed = self.get_daily_success_and_failure_metrics()
+        return {
+            'dates_metrics_date': [date.strftime('%m-%d') for date in self.date_range_list] or ['0'],
+            'dates_metrics_total_count_success': success,
+            'dates_metrics_total_count_failed': failed,
+        }
+
+    def _get_ongoing_counts(self):
+        ongoing_counts = cache.get(self.ongoing_change_secret_cache_key)
+        if ongoing_counts is not None:
+            return self._format_ongoing_counts(ongoing_counts)
+
+        execution_ids = self._get_active_execution_ids()
+        snapshots = AutomationExecution.objects.filter(id__in=execution_ids).values_list('snapshot', flat=True)
+
+        asset_ids = {a for snap in snapshots for a in snap.get('assets', [])}
+        account_ids = {a for snap in snapshots for a in snap.get('accounts', [])}
+
+        counts = (len(execution_ids), len(asset_ids), len(account_ids))
+        cache.set(self.ongoing_change_secret_cache_key, counts, 60)
+
+        return self._format_ongoing_counts(counts)
+
+    def _get_active_execution_ids(self):
+        execution_ids = []
+        inspect = app.control.inspect()
+        try:
+            active_tasks = inspect.active()
+        except Exception:
+            active_tasks = None
+
+        if not active_tasks:
+            return execution_ids
+
+        for tasks in active_tasks.values():
+            for task in tasks:
+                if (
+                    task.get('name') == self.task_name and
+                    task.get('kwargs', {}).get('tp') == self.tp
+                ):
+                    execution_ids.append(task.get('id'))
+
+        return execution_ids
+
+    def _format_ongoing_counts(self, counts):
+        return {
+            'total_count_ongoing_change_secret': counts[0],
+            'total_count_ongoing_change_secret_assets': counts[1],
+            'total_count_ongoing_change_secret_accounts': counts[2],
+        }

@@ -338,6 +338,57 @@ class RelatedManager:
                 continue
         return q
 
+    @staticmethod
+    def _get_custom_filter_q(to_model, custom_attr_filter, name, val, match):
+        spec_attr_filter = getattr(to_model, "get_{}_filter_attr_q".format(name), None)
+        if spec_attr_filter:
+            return spec_attr_filter(val, match)
+        if custom_attr_filter:
+            return custom_attr_filter(name, val, match)
+        return None
+
+    @staticmethod
+    def _get_regex_filter_q(name, val, match):
+        try:
+            re.compile(val)
+            lookup = "{}__{}".format(name, match)
+            return Q(**{lookup: val})
+        except re.error:
+            return Q(pk__isnull=True)
+
+    @staticmethod
+    def _ensure_list_value(val):
+        if not isinstance(val, list):
+            return [val]
+        return val
+
+    @staticmethod
+    def _append_m2m_all_filters(filters, name, val):
+        for v in val:
+            filters.append(Q(**{"{}__in".format(name): [v]}))
+
+    @classmethod
+    def _get_attr_match_filter_q(cls, filters, name, val, match):
+        if match == 'ip_in':
+            return cls.get_ip_in_q(name, val)
+        if match in ("contains", "startswith", "endswith", "gte", "lte", "gt", "lt"):
+            lookup = "{}__{}".format(name, match)
+            return Q(**{lookup: val})
+        if match == 'regex':
+            return cls._get_regex_filter_q(name, val, match)
+        if match == "not":
+            return ~Q(**{name: val})
+        if match.startswith('m2m'):
+            val = cls._ensure_list_value(val)
+            if match == 'm2m_all':
+                cls._append_m2m_all_filters(filters, name, val)
+                return None
+            return Q(**{"{}__in".format(name): val})
+        if match == 'in':
+            val = cls._ensure_list_value(val)
+            return Q() if '*' in val else Q(**{"{}__in".format(name): val})
+        return Q() if val == '*' else Q(**{name: val})
+
     @classmethod
     def _get_filter_attrs_qs(cls, value, to_model):
         filters = []
@@ -357,45 +408,14 @@ class RelatedManager:
             if name is None or val is None:
                 continue
 
-            custom_filter_q = None
-            spec_attr_filter = getattr(to_model, "get_{}_filter_attr_q".format(name), None)
-            if spec_attr_filter:
-                custom_filter_q = spec_attr_filter(val, match)
-            elif custom_attr_filter:
-                custom_filter_q = custom_attr_filter(name, val, match)
+            custom_filter_q = cls._get_custom_filter_q(to_model, custom_attr_filter, name, val, match)
             if custom_filter_q:
                 filters.append(custom_filter_q)
                 continue
 
-            if match == 'ip_in':
-                q = cls.get_ip_in_q(name, val)
-            elif match in ("contains", "startswith", "endswith", "gte", "lte", "gt", "lt"):
-                lookup = "{}__{}".format(name, match)
-                q = Q(**{lookup: val})
-            elif match == 'regex':
-                try:
-                    re.compile(val)
-                    lookup = "{}__{}".format(name, match)
-                    q = Q(**{lookup: val})
-                except re.error:
-                    q = Q(pk__isnull=True)
-            elif match == "not":
-                q = ~Q(**{name: val})
-            elif match.startswith('m2m'):
-                if not isinstance(val, list):
-                    val = [val]
-                if match == 'm2m_all':
-                    for v in val:
-                        filters.append(Q(**{"{}__in".format(name): [v]}))
-                    continue
-                else:
-                    q = Q(**{"{}__in".format(name): val})
-            elif match == 'in':
-                if not isinstance(val, list):
-                    val = [val]
-                q = Q() if '*' in val else Q(**{"{}__in".format(name): val})
-            else:
-                q = Q() if val == '*' else Q(**{name: val})
+            q = cls._get_attr_match_filter_q(filters, name, val, match)
+            if q is None:
+                continue
             filters.append(q)
         return filters
 
@@ -450,6 +470,78 @@ class JSONManyToManyDescriptor:
             value = value.value
         manager.set(value)
 
+    @staticmethod
+    def _get_rule_custom_filter_q(to_model, custom_attr_filter, rule, rule_value, rule_match):
+        spec_attr_filter = getattr(to_model, "get_{}_filter_attr_q".format(rule['name']), None)
+        if spec_attr_filter:
+            return spec_attr_filter(rule_value, rule_match)
+        if custom_attr_filter:
+            return custom_attr_filter(rule['name'], rule_value, rule_match)
+        return None
+
+    @staticmethod
+    def _apply_regex_match(value, rule_value):
+        try:
+            return bool(re.search(r'{}'.format(rule_value), value))
+        except Exception as e:
+            logging.error('Error regex match: %s', e)
+            return False
+
+    @staticmethod
+    def _apply_compare_match(value, rule_value, rule_match):
+        operations = {
+            'gte': lambda x, y: x >= y,
+            'lte': lambda x, y: x <= y,
+            'gt': lambda x, y: x > y,
+            'lt': lambda x, y: x < y
+        }
+        return operations[rule_match](value, rule_value)
+
+    @staticmethod
+    def _normalize_m2m_match_values(value, rule_value):
+        if isinstance(value, Manager):
+            value = value.values_list('id', flat=True)
+        elif isinstance(value, QuerySet):
+            value = value.values_list('id', flat=True)
+        elif isinstance(value, models.Model):
+            value = [value.id]
+        if isinstance(rule_value, (str, int)):
+            rule_value = [rule_value]
+        value = set(map(str, value))
+        rule_value = set(map(str, rule_value))
+        return value, rule_value
+
+    def _apply_rule_match(self, value, rule_value, rule_match, rule):
+        match rule_match:
+            case 'in':
+                return value in rule_value or '*' in rule_value
+            case 'exact':
+                return value == rule_value or rule_value == '*'
+            case 'contains':
+                return rule_value in value
+            case 'startswith':
+                return str(value).startswith(str(rule_value))
+            case 'endswith':
+                return str(value).endswith(str(rule_value))
+            case 'regex':
+                return self._apply_regex_match(value, rule_value)
+            case 'not':
+                return value != rule_value
+            case 'gte' | 'lte' | 'gt' | 'lt':
+                return self._apply_compare_match(value, rule_value, rule_match)
+            case 'ip_in':
+                if isinstance(rule_value, str):
+                    rule_value = [rule_value]
+                return '*' in rule_value or contains_ip(value, rule_value)
+            case rule_match if rule_match.startswith('m2m'):
+                value, rule_value = self._normalize_m2m_match_values(value, rule_value)
+                if rule['match'] == 'm2m_all':
+                    return rule_value.issubset(value)
+                return bool(value & rule_value)
+            case __:
+                logging.error("unknown match: {}".format(rule['match']))
+                return False
+
     def is_match(self, obj, attr_rules):
         # m2m 的情况
         # 自定义的情况：比如 nodes, category
@@ -463,67 +555,14 @@ class JSONManyToManyDescriptor:
             rule_value = rule.get('value', '')
             rule_match = rule.get('match', 'exact')
 
-            custom_filter_q = None
-            spec_attr_filter = getattr(to_model, "get_{}_filter_attr_q".format(rule['name']), None)
-            if spec_attr_filter:
-                custom_filter_q = spec_attr_filter(rule_value, rule_match)
-            elif custom_attr_filter:
-                custom_filter_q = custom_attr_filter(rule['name'], rule_value, rule_match)
+            custom_filter_q = self._get_rule_custom_filter_q(
+                to_model, custom_attr_filter, rule, rule_value, rule_match
+            )
             if custom_filter_q:
                 custom_q &= custom_filter_q
                 continue
 
-            match rule_match:
-                case 'in':
-                    res &= value in rule_value or '*' in rule_value
-                case 'exact':
-                    res &= value == rule_value or rule_value == '*'
-                case 'contains':
-                    res &= rule_value in value
-                case 'startswith':
-                    res &= str(value).startswith(str(rule_value))
-                case 'endswith':
-                    res &= str(value).endswith(str(rule_value))
-                case 'regex':
-                    try:
-                        matched = bool(re.search(r'{}'.format(rule_value), value))
-                    except Exception as e:
-                        logging.error('Error regex match: %s', e)
-                        matched = False
-                    res &= matched
-                case 'not':
-                    res &= value != rule_value
-                case 'gte' | 'lte' | 'gt' | 'lt':
-                    operations = {
-                        'gte': lambda x, y: x >= y,
-                        'lte': lambda x, y: x <= y,
-                        'gt': lambda x, y: x > y,
-                        'lt': lambda x, y: x < y
-                    }
-                    res &= operations[rule_match](value, rule_value)
-                case 'ip_in':
-                    if isinstance(rule_value, str):
-                        rule_value = [rule_value]
-                    res &= '*' in rule_value or contains_ip(value, rule_value)
-                case rule_match if rule_match.startswith('m2m'):
-                    if isinstance(value, Manager):
-                        value = value.values_list('id', flat=True)
-                    elif isinstance(value, QuerySet):
-                        value = value.values_list('id', flat=True)
-                    elif isinstance(value, models.Model):
-                        value = [value.id]
-                    if isinstance(rule_value, (str, int)):
-                        rule_value = [rule_value]
-                    value = set(map(str, value))
-                    rule_value = set(map(str, rule_value))
-
-                    if rule['match'] == 'm2m_all':
-                        res &= rule_value.issubset(value)
-                    else:
-                        res &= bool(value & rule_value)
-                case __:
-                    logging.error("unknown match: {}".format(rule['match']))
-                    res &= False
+            res &= self._apply_rule_match(value, rule_value, rule_match, rule)
 
             if not res:
                 return res

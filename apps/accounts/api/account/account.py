@@ -62,34 +62,44 @@ class AccountViewSet(OrgBulkModelViewSet):
 
     def perform_bulk_create(self, serializer):
         result = super().perform_create(serializer)
+        template_items = self._get_template_items(serializer.data)
+        if len(template_items) >= 2:
+            source_template_accounts = {
+                f"{item['asset']['id']}+{item['source_id']}": item["id"]
+                for item in template_items
+            }
+            template_ids = {item["source_id"] for item in template_items}
+            su_from_map = self._build_su_from_map(template_ids)
+            if su_from_map:
+                account_su_from_id_map = self._build_account_su_from_id_map(
+                    template_items, source_template_accounts, su_from_map
+                )
+                if account_su_from_id_map:
+                    self._update_account_su_from(account_su_from_id_map)
+        return result
 
-        template_items = [
-            d for d in serializer.data
+    @staticmethod
+    def _get_template_items(serializer_data):
+        return [
+            d for d in serializer_data
             if d.get("source", {}).get('value') == Source.TEMPLATE and d.get("source_id")
         ]
-        if len(template_items) < 2:
-            return result
 
-        source_template_accounts = {
-            f"{item['asset']['id']}+{item['source_id']}": item["id"]
-            for item in template_items
-        }
-        template_ids = {item["source_id"] for item in template_items}
-
+    @staticmethod
+    def _build_su_from_map(template_ids):
         templates = (
             AccountTemplate.objects
             .filter(id__in=template_ids, su_from_id__isnull=False)
             .only("id", "su_from_id")
         )
-        su_from_map = {str(tpl.id): str(tpl.su_from_id) for tpl in templates}
-        if not su_from_map:
-            return result
+        return {str(tpl.id): str(tpl.su_from_id) for tpl in templates}
 
-        account_su_from_id_map: dict[str] = {}
+    @staticmethod
+    def _build_account_su_from_id_map(template_items, source_template_accounts, su_from_map):
+        account_su_from_id_map: dict[str, str] = {}
 
         for d in template_items:
-            source_tpl_id = d["source_id"]
-            su_from_tpl_id = su_from_map.get(source_tpl_id)
+            su_from_tpl_id = su_from_map.get(d["source_id"])
             if not su_from_tpl_id:
                 continue
 
@@ -98,10 +108,10 @@ class AccountViewSet(OrgBulkModelViewSet):
             )
             if su_from_account_id:
                 account_su_from_id_map[d["id"]] = su_from_account_id
+        return account_su_from_id_map
 
-        if not account_su_from_id_map:
-            return result
-
+    @staticmethod
+    def _update_account_su_from(account_su_from_id_map):
         accounts = Account.objects.filter(id__in=account_su_from_id_map.keys())
         for account in accounts:
             su_from_account_id = account_su_from_id_map.get(str(account.id))
@@ -109,7 +119,6 @@ class AccountViewSet(OrgBulkModelViewSet):
                 account.su_from_id = su_from_account_id
                 account.save(update_fields=['su_from_id'])
 
-        return result
 
     @action(methods=['get'], detail=False, url_path='su-from-accounts')
     def su_from_accounts(self, request, *args, **kwargs):
@@ -247,13 +256,28 @@ class AssetAccountBulkCreateApi(CreateAPIView):
         return Asset.objects.filter(id__in=asset_ids)
 
     def create(self, request, *args, **kwargs):
-        if hasattr(request.data, "copy"):
-            base_payload = request.data.copy()
-        else:
-            base_payload = dict(request.data)
-
+        base_payload = self._get_base_payload(request)
         templates = base_payload.pop("template", None)
         assets = self.get_all_assets(base_payload)
+        error_response = self._validate_assets(assets)
+        if error_response:
+            return error_response
+
+        payloads = self._build_payloads(base_payload, templates)
+        result, errors = self._process_payloads(payloads, assets)
+
+        if errors:
+            raise drf_serializers.ValidationError(errors)
+
+        return self._build_response(result)
+
+    def _get_base_payload(self, request):
+        if hasattr(request.data, "copy"):
+            return request.data.copy()
+        return dict(request.data)
+
+
+    def _validate_assets(self, assets):
         if not assets.exists():
             error = _("No valid assets found for account creation.")
             return Response(
@@ -264,14 +288,27 @@ class AssetAccountBulkCreateApi(CreateAPIView):
                 status=HTTP_400_BAD_REQUEST
             )
 
+
+    def _build_payloads(self, base_payload, templates):
+        if not templates:
+            return [base_payload]
+
+        if not isinstance(templates, (list, tuple)):
+            templates = [templates]
+
+        return [
+            {**base_payload, "template": tpl}
+            for tpl in templates
+        ]
+
+
+    def _process_payloads(self, payloads, assets):
         result = []
         errors = []
 
-        def handle_one(_payload):
+        for payload in payloads:
             try:
-                ser = self.get_serializer(data=_payload)
-                ser.is_valid(raise_exception=True)
-                data = ser.bulk_create(ser.validated_data, assets)
+                data = self._handle_single_payload(payload, assets)
                 if isinstance(data, (list, tuple)):
                     result.extend(data)
                 else:
@@ -281,19 +318,16 @@ class AssetAccountBulkCreateApi(CreateAPIView):
             except Exception as e:
                 errors.extend([str(e)])
 
-        if not templates:
-            handle_one(base_payload)
-        else:
-            if not isinstance(templates, (list, tuple)):
-                templates = [templates]
-            for tpl in templates:
-                payload = dict(base_payload)
-                payload["template"] = tpl
-                handle_one(payload)
+        return result, errors
 
-        if errors:
-            raise drf_serializers.ValidationError(errors)
 
+    def _handle_single_payload(self, payload, assets):
+        ser = self.get_serializer(data=payload)
+        ser.is_valid(raise_exception=True)
+        return ser.bulk_create(ser.validated_data, assets)
+
+
+    def _build_response(self, result):
         out_ser = serializers.AssetAccountBulkSerializerResultSerializer(result, many=True)
         return Response(data=out_ser.data, status=HTTP_200_OK)
 

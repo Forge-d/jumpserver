@@ -58,21 +58,12 @@ class ThirdPartyLoginMiddleware(mixins.AuthMixin):
 
     def __call__(self, request):
         response = self.get_response(request)
-        # 没有认证过，证明不是从 第三方 来的
-        if request.user.is_anonymous:
+
+        if self._is_anonymous_or_not_required(request):
             return response
-        if not request.session.get('auth_third_party_required'):
+
+        if self._is_whitelisted_url(request):
             return response
-        white_urls = [
-            'jsi18n/', '/static/',
-            'login/guard', 'login/wait-confirm',
-            'login-confirm-ticket/status',
-            'settings/public/open',
-            'core/auth/login', 'core/auth/logout'
-        ]
-        for url in white_urls:
-            if request.path.find(url) > -1:
-                return response
 
         ip = get_request_ip(request)
         try:
@@ -81,39 +72,62 @@ class ThirdPartyLoginMiddleware(mixins.AuthMixin):
             self._check_third_party_login_acl()
             self._check_login_acl(request.user, ip)
         except Exception as e:
-            if getattr(request, 'user_need_delete', False):
-                request.user.delete()
-            else:
-                error_message = getattr(e, 'msg', None)
-                error_message = error_message or str(e)
-                post_auth_failed.send(
-                    sender=self.__class__, username=request.user.username,
-                    request=self.request, reason=error_message
-                )
-            auth_logout(request)
-            context = {
-                'title': _('Authentication failed'),
-                'message': _('Authentication failed (before login check failed): {}').format(e),
-                'interval': 10,
-                'redirect_url': reverse('authentication:login') + '?admin=1',
-                'auto_redirect': True,
-            }
-            response = render(request, 'authentication/auth_fail_flash_message_standalone.html', context)
+            response = self._handle_auth_failure(request, e)
         else:
             if not self.request.session.get('auth_confirm_required'):
                 return response
-            guard_url = reverse('authentication:login-guard')
-            args = request.META.get('QUERY_STRING', '')
-            if args:
-                guard_url = "%s?%s" % (guard_url, args)
-            response = redirect(guard_url)
+            response = self._redirect_to_guard(request)
         finally:
-            if request.session.get('can_send_notifications') and \
-                    self.request.session.get('auth_notice_required'):
-                request.session['can_send_notifications'] = False
-                user_log_id = self.request.session.get('user_log_id')
-                auth_acl_id = self.request.session.get('auth_acl_id')
-                send_login_info_to_reviewers(user_log_id, auth_acl_id)
+            self._send_notifications_if_required(request, response)
+
+        return response
+
+    def _is_anonymous_or_not_required(self, request):
+        return request.user.is_anonymous or not request.session.get('auth_third_party_required')
+
+    def _is_whitelisted_url(self, request):
+        white_urls = [
+            'jsi18n/', '/static/',
+            'login/guard', 'login/wait-confirm',
+            'login-confirm-ticket/status',
+            'settings/public/open',
+            'core/auth/login', 'core/auth/logout'
+        ]
+        return any(request.path.find(url) > -1 for url in white_urls)
+
+    def _handle_auth_failure(self, request, exception):
+        if getattr(request, 'user_need_delete', False):
+            request.user.delete()
+        else:
+            error_message = getattr(exception, 'msg', None) or str(exception)
+            post_auth_failed.send(
+                sender=self.__class__, username=request.user.username,
+                request=self.request, reason=error_message
+            )
+        auth_logout(request)
+        context = {
+            'title': _('Authentication failed'),
+            'message': _('Authentication failed (before login check failed): {}').format(exception),
+            'interval': 10,
+            'redirect_url': reverse('authentication:login') + '?admin=1',
+            'auto_redirect': True,
+        }
+        return render(request, 'authentication/auth_fail_flash_message_standalone.html', context)
+
+    def _redirect_to_guard(self, request):
+        guard_url = reverse('authentication:login-guard')
+        args = request.META.get('QUERY_STRING', '')
+        if args:
+            guard_url = f"{guard_url}?{args}"
+        return redirect(guard_url)
+
+    def _send_notifications_if_required(self, request, response):
+        if request.session.get('can_send_notifications') and \
+                self.request.session.get('auth_notice_required'):
+            request.session['can_send_notifications'] = False
+            user_log_id = self.request.session.get('user_log_id')
+            auth_acl_id = self.request.session.get('auth_acl_id')
+            send_login_info_to_reviewers(user_log_id, auth_acl_id)
         return response
 
 
