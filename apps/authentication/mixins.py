@@ -164,6 +164,19 @@ def _set_only_allow_login_from_source_error(request, temp_user):
         ).format(temp_user.source_display)
 
 
+def _try_backend_authenticate(backend, request, credentials):
+    """Try authenticating with one backend. Returns (user, should_break)."""
+    try:
+        user = backend.authenticate(request, **credentials)
+        return user, False
+    except PermissionDenied:
+        # This backend says to stop in our tracks - this user should not be allowed in at all.
+        return None, True
+    except OnlyAllowExistUserAuthError:
+        _set_only_allow_exist_user_error(request)
+        return None, False
+
+
 @_authenticate_context
 def authenticate(request=None, **credentials):
     """
@@ -172,41 +185,11 @@ def authenticate(request=None, **credentials):
     temp_user = None
     username = credentials.get('username')
     for backend, backend_path in _get_backends(return_tuples=True):
-        # 检查用户名是否允许认证 (预先检查，不浪费认证时间)
-        logger.info('Try using auth backend: {}'.format(str(backend)))
-        if not backend.username_allow_authenticate(username):
-            continue
-
-        if not _backend_accepts_credentials(backend, request, credentials):
-            continue
-        
-        try:
-            user = backend.authenticate(request, **credentials)
-        except PermissionDenied:
-            # This backend says to stop in our tracks - this user should not be allowed in at all.
+        result, temp_user = _authenticate_with_backend(backend, backend_path, username, request, credentials, temp_user)
+        if result is not None:
+            return result
+        if temp_user is False:
             break
-        except OnlyAllowExistUserAuthError:
-            _set_only_allow_exist_user_error(request)
-            continue
-        
-        if user is None:
-            continue
-
-        if not user.is_valid:
-            temp_user = user
-            temp_user.backend = backend_path
-            _set_invalid_user_error(request)
-            return temp_user
-
-        # 检查用户是否允许认证
-        if not backend.user_allow_authenticate(user):
-            temp_user = user
-            temp_user.backend = backend_path
-            continue
-
-        # Annotate the user object with the path of the backend.
-        user.backend = backend_path
-        return user
     else:
         if temp_user is not None:
             _set_only_allow_login_from_source_error(request, temp_user)
@@ -214,6 +197,34 @@ def authenticate(request=None, **credentials):
 
     # The credentials supplied are invalid to all backends, fire signal
     user_login_failed.send(sender=__name__, credentials=_clean_credentials(credentials), request=request)
+
+
+def _authenticate_with_backend(backend, backend_path, username, request, credentials, temp_user):
+    # 检查用户名是否允许认证 (预先检查，不浪费认证时间)
+    logger.info('Try using auth backend: {}'.format(str(backend)))
+    if not backend.username_allow_authenticate(username):
+        return None, temp_user
+    if not _backend_accepts_credentials(backend, request, credentials):
+        return None, temp_user
+
+    user, should_break = _try_backend_authenticate(backend, request, credentials)
+    if should_break:
+        return None, False
+    if user is None:
+        return None, temp_user
+
+    user.backend = backend_path
+    if not user.is_valid:
+        _set_invalid_user_error(request)
+        return user, temp_user
+
+    # 检查用户是否允许认证
+    if not backend.user_allow_authenticate(user):
+        temp_user = user
+        return None, temp_user
+
+    # Annotate the user object with the path of the backend.
+    return user, temp_user
 
 
 auth.authenticate = authenticate

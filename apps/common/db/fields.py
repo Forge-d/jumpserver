@@ -609,6 +609,25 @@ class JSONManyToManyField(models.JSONField):
         return name, path, args, kwargs
 
     @staticmethod
+    def _validate_ids_value(val):
+        if not isinstance(val["ids"], list):
+            raise ValueError(_("Invalid ids for ids, should be a list"))
+        if not val["ids"]:
+            raise ValueError(_("This field is required."))
+
+    @staticmethod
+    def _validate_attrs_value(val):
+        if not isinstance(val["attrs"], list):
+            raise ValueError(_("Invalid attrs, should be a list of dict"))
+        if not val["attrs"]:
+            raise ValueError(_("This field is required."))
+        for attr in val["attrs"]:
+            if not isinstance(attr, dict):
+                raise ValueError(_("Invalid attrs, should be a list of dict"))
+            if 'name' not in attr or 'value' not in attr:
+                raise ValueError(_("Invalid attrs, should be has name and value"))
+
+    @staticmethod
     def check_value(val):
         if not val:
             return val
@@ -622,20 +641,9 @@ class JSONManyToManyField(models.JSONField):
         if val["type"] not in ["all", "ids", "attrs"]:
             raise ValueError(_('Invalid type, should be "all", "ids" or "attrs"'))
         if val["type"] == "ids":
-            if not isinstance(val["ids"], list):
-                raise ValueError(_("Invalid ids for ids, should be a list"))
-            if not val["ids"]:
-                raise ValueError(_("This field is required."))
+            JSONManyToManyField._validate_ids_value(val)
         elif val["type"] == "attrs":
-            if not isinstance(val["attrs"], list):
-                raise ValueError(_("Invalid attrs, should be a list of dict"))
-            if not val["attrs"]:
-                raise ValueError(_("This field is required."))
-            for attr in val["attrs"]:
-                if not isinstance(attr, dict):
-                    raise ValueError(_("Invalid attrs, should be a list of dict"))
-                if 'name' not in attr or 'value' not in attr:
-                    raise ValueError(_("Invalid attrs, should be has name and value"))
+            JSONManyToManyField._validate_attrs_value(val)
 
     def get_prep_value(self, value):
         if value is None:

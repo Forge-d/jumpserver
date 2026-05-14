@@ -483,67 +483,102 @@ class ConnectionTokenViewSet(AuthFaceMixin, ExtraActionApiMixin, RootOrgViewMixi
 
     def _validate_acl(self, user, asset, account, connect_method, protocol):
         from acls.models import LoginAssetACL
-        kwargs = {'user': user, 'asset': asset, 'account': account}
-        if account.username == AliasAccount.INPUT:
-            kwargs['account_username'] = self.input_username
+        kwargs = self._get_acl_filter_kwargs(user, asset, account)
         acls = LoginAssetACL.filter_queryset(**kwargs)
         ip = get_request_ip_or_data(self.request)
         acl = LoginAssetACL.get_match_rule_acls(user, ip, acls)
         if not acl:
             return
-        if acl.is_action(acl.ActionChoices.accept):
-            self._record_operate_log(acl, asset)
+
+        if self._handle_accept_acl(acl, asset):
             return
-        if acl.is_action(acl.ActionChoices.reject):
-            self._record_operate_log(acl, asset)
-            msg = _('ACL action is reject: {}({})'.format(acl.name, acl.id))
-            raise JMSException(code='acl_reject', detail=msg)
-        if acl.is_action(acl.ActionChoices.review):
-            if not self.request.query_params.get('create_ticket'):
-                msg = _('ACL action is review')
-                raise JMSException(code='acl_review', detail=msg)
-            self._record_operate_log(acl, asset)
-            ticket = LoginAssetACL.create_login_asset_review_ticket(
-                user=user, asset=asset, account_username=self.input_username,
-                assignees=acl.reviewers.all(), org_id=asset.org_id
-            )
+
+        self._handle_reject_acl(acl, asset)
+
+        ticket = self._handle_review_acl(acl, asset, user)
+        if ticket:
             return ticket
-        if acl.is_action(acl.ActionChoices.face_verify):
-            if not self.request.query_params.get('face_verify'):
-                msg = _('ACL action is face verify')
-                raise JMSException(code='acl_face_verify', detail=msg)
-            self.need_face_verify = True
-        if acl.is_action(acl.ActionChoices.face_online):
-            if connect_method not in [WebMethod.web_cli, WebMethod.web_gui]:
-                msg = _('ACL action not supported for this asset')
-                raise JMSException(detail=msg, code='acl_face_online_not_supported')
 
-            face_verify = self.request.query_params.get('face_verify')
-            face_monitor_token = self.request.query_params.get('face_monitor_token')
+        self._handle_face_verify_acl(acl)
+        self._handle_face_online_acl(acl, connect_method)
+        self._handle_notice_acl(acl, asset, user, account, connect_method, protocol, ip)
 
-            if not face_verify or not face_monitor_token:
-                msg = _('ACL action is face online')
-                raise JMSException(code='acl_face_online', detail=msg)
+    def _get_acl_filter_kwargs(self, user, asset, account):
+        kwargs = {'user': user, 'asset': asset, 'account': account}
+        if account.username == AliasAccount.INPUT:
+            kwargs['account_username'] = self.input_username
+        return kwargs
 
-            self.need_face_verify = True
-            self.face_monitor_token = face_monitor_token
+    def _handle_accept_acl(self, acl, asset):
+        if not acl.is_action(acl.ActionChoices.accept):
+            return False
+        self._record_operate_log(acl, asset)
+        return True
 
-        if acl.is_action(acl.ActionChoices.notice):
-            reviewers = acl.reviewers.all()
-            if not reviewers:
-                return
+    def _handle_reject_acl(self, acl, asset):
+        if not acl.is_action(acl.ActionChoices.reject):
+            return
+        self._record_operate_log(acl, asset)
+        msg = _('ACL action is reject: {}({})'.format(acl.name, acl.id))
+        raise JMSException(code='acl_reject', detail=msg)
 
-            self._record_operate_log(acl, asset)
-            os = get_request_os(self.request) if self.request else 'windows'
-            method = ConnectMethodUtil.get_connect_method(
-                connect_method, protocol=protocol, os=os
-            )
-            login_from = method['label'] if method else connect_method
-            for reviewer in reviewers:
-                AssetLoginReminderMsg(
-                    reviewer, asset, user, account, acl,
-                    ip, self.input_username, login_from
-                ).publish_async()
+    def _handle_review_acl(self, acl, asset, user):
+        if not acl.is_action(acl.ActionChoices.review):
+            return None
+        if not self.request.query_params.get('create_ticket'):
+            msg = _('ACL action is review')
+            raise JMSException(code='acl_review', detail=msg)
+        from acls.models import LoginAssetACL
+
+        self._record_operate_log(acl, asset)
+        return LoginAssetACL.create_login_asset_review_ticket(
+            user=user, asset=asset, account_username=self.input_username,
+            assignees=acl.reviewers.all(), org_id=asset.org_id
+        )
+
+    def _handle_face_verify_acl(self, acl):
+        if not acl.is_action(acl.ActionChoices.face_verify):
+            return
+        if not self.request.query_params.get('face_verify'):
+            msg = _('ACL action is face verify')
+            raise JMSException(code='acl_face_verify', detail=msg)
+        self.need_face_verify = True
+
+    def _handle_face_online_acl(self, acl, connect_method):
+        if not acl.is_action(acl.ActionChoices.face_online):
+            return
+        if connect_method not in [WebMethod.web_cli, WebMethod.web_gui]:
+            msg = _('ACL action not supported for this asset')
+            raise JMSException(detail=msg, code='acl_face_online_not_supported')
+
+        face_verify = self.request.query_params.get('face_verify')
+        face_monitor_token = self.request.query_params.get('face_monitor_token')
+
+        if not face_verify or not face_monitor_token:
+            msg = _('ACL action is face online')
+            raise JMSException(code='acl_face_online', detail=msg)
+
+        self.need_face_verify = True
+        self.face_monitor_token = face_monitor_token
+
+    def _handle_notice_acl(self, acl, asset, user, account, connect_method, protocol, ip):
+        if not acl.is_action(acl.ActionChoices.notice):
+            return
+        reviewers = acl.reviewers.all()
+        if not reviewers:
+            return
+
+        self._record_operate_log(acl, asset)
+        os = get_request_os(self.request) if self.request else 'windows'
+        method = ConnectMethodUtil.get_connect_method(
+            connect_method, protocol=protocol, os=os
+        )
+        login_from = method['label'] if method else connect_method
+        for reviewer in reviewers:
+            AssetLoginReminderMsg(
+                reviewer, asset, user, account, acl,
+                ip, self.input_username, login_from
+            ).publish_async()
 
     def create_face_verify(self, response):
         if not self.request.user.face_vector:

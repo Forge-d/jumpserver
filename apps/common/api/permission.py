@@ -15,32 +15,27 @@ class AllowBulkDestroyMixin:
         我们规定，批量删除的情况必须用 `id` 指定要删除的数据。
         """
         where = filtered.query.where
+        return self.check_conditions(where)
 
-        def has_id_condition(node):
-            # 检查是否有 `id` 或 `ptr_id` 的条件
-            if isinstance(node, Q):
-                return any(
-                    lookup in str(node)
-                    for lookup in ['id', 'ptr_id']
-                )
-            if hasattr(node, 'lhs') and hasattr(node, 'rhs'):
-                return any(
-                    lookup in str(node.lhs)
-                    for lookup in ['id', 'ptr_id']
-                )
-            return False
+    @staticmethod
+    def has_id_condition(node):
+        # 检查对象是否包含 'id' 或 'ptr_id' 字段
+        if isinstance(node, Q):
+            return any(lookup in str(node) for lookup in ['id', 'ptr_id'])
+        if hasattr(node, 'lhs') and hasattr(node, 'rhs'):
+            return any(lookup in str(node.lhs) for lookup in ['id', 'ptr_id'])
+        return False
 
-        def check_conditions(where):
-            if hasattr(where, 'children'):
-                for child in where.children:
-                    if has_id_condition(child):
-                        return True
-                    if hasattr(child, 'children') and check_conditions(child):
-                        return True
-            return False
-
-        can = check_conditions(where)
-        return can
+    @classmethod
+    def check_conditions(cls, where):
+        # 递归检查 where 树中是否有 id 条件
+        if hasattr(where, 'children'):
+            for child in where.children:
+                if cls.has_id_condition(child):
+                    return True
+                if hasattr(child, 'children') and cls.check_conditions(child):
+                    return True
+        return False
 
 
 class RoleAdminMixin:

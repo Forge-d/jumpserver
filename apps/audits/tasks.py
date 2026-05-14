@@ -87,6 +87,23 @@ def batch_delete(queryset, batch_size=3000):
             model.objects.filter(id__in=list(pks)).delete()
 
 
+def _get_expired_file_path(root, file_name, file_types, timestamp):
+    if not any(file_name.endswith(file_type) for file_type in file_types):
+        return None
+    file_path = os.path.join(root, file_name)
+    if os.path.getmtime(file_path) <= timestamp:
+        return file_path
+    return None
+
+
+def _remove_files(rm_files):
+    for file in rm_files:
+        try:
+            os.remove(file)
+        except Exception as e:
+            logger.error(f"Remove file {file} error: {e}")
+
+
 def remove_files_by_days(root_path, days, file_types=None):
     if file_types is None:
         file_types = ['.json', '.tar', '.gz', '.mp4']
@@ -95,15 +112,10 @@ def remove_files_by_days(root_path, days, file_types=None):
     for root, dirs, files in os.walk(root_path):
         rm_files = []
         for file in files:
-            if any(file.endswith(file_type) for file_type in file_types):
-                file_path = os.path.join(root, file)
-                if os.path.getmtime(file_path) <= timestamp:
-                    rm_files.append(file_path)
-        for file in rm_files:
-            try:
-                os.remove(file)
-            except Exception as e:
-                logger.error(f"Remove file {file} error: {e}")
+            file_path = _get_expired_file_path(root, file, file_types, timestamp)
+            if file_path:
+                rm_files.append(file_path)
+        _remove_files(rm_files)
 
 
 def clean_expired_session_period():

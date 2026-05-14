@@ -201,42 +201,11 @@ def merge_delay_run(ttl=5, key=None):
     :param key: 是否合并参数, 一个 callback
     :return:
     """
-
-    def delay(func, *args, **kwargs):
-        from orgs.utils import get_current_org
-        # 每次调用 delay 时可以指定本次调用的 ttl
-        current_ttl = kwargs.pop('ttl', ttl)
-        suffix_key_func = key if key else default_suffix_key
-        org = get_current_org()
-        func_name = f'{func.__module__}_{func.__name__}'
-        key_suffix = suffix_key_func(*args, **kwargs)
-        cache_key = f'MERGE_DELAY_RUN_{func_name}_{key_suffix}'
-        cache_kwargs = _loop_debouncer_func_args_cache.get(cache_key, {})
-
-        for k, v in kwargs.items():
-            if not isinstance(v, (tuple, list, set)):
-                raise ValueError('func kwargs value must be list or tuple: %s %s' % (func.__name__, v))
-            v = set(v)
-            if k not in cache_kwargs:
-                cache_kwargs[k] = v
-            else:
-                cache_kwargs[k] = cache_kwargs[k].union(v)
-        _loop_debouncer_func_args_cache[cache_key] = cache_kwargs
-        run_debouncer_func(cache_key, org, current_ttl, func, *args, **cache_kwargs)
-
-    def apply(func, sync=False, *args, **kwargs):
-        if sync:
-            return func(*args, **kwargs)
-        else:
-            return delay(func, *args, **kwargs)
+    delay = functools.partial(_merge_delay_delay, ttl=ttl, key=key)
+    apply = functools.partial(_merge_delay_apply, delay)
 
     def inner(func):
-        sigs = inspect.signature(func)
-        if len(sigs.parameters) != 1:
-            raise ValueError('func must have one arguments: %s' % func.__name__)
-        param = list(sigs.parameters.values())[0]
-        if not isinstance(param.default, tuple):
-            raise ValueError('func default must be tuple: %s' % param.default)
+        _validate_merge_delay_run_func(func)
         func.delay = functools.partial(delay, func)
         func.apply = functools.partial(apply, func)
 
@@ -248,6 +217,47 @@ def merge_delay_run(ttl=5, key=None):
 
     return inner
 
+def _merge_delay_update_cache_kwargs(func, cache_key, kwargs):
+    cache_kwargs = _loop_debouncer_func_args_cache.get(cache_key, {})
+
+    for k, v in kwargs.items():
+        if not isinstance(v, (tuple, list, set)):
+            raise ValueError('func kwargs value must be list or tuple: %s %s' % (func.__name__, v))
+        v = set(v)
+        if k not in cache_kwargs:
+            cache_kwargs[k] = v
+        else:
+            cache_kwargs[k] = cache_kwargs[k].union(v)
+    return cache_kwargs
+
+
+def _merge_delay_delay(func, *args, ttl=5, key=None, **kwargs):
+    from orgs.utils import get_current_org
+    # 每次调用 delay 时可以指定本次调用的 ttl
+    current_ttl = kwargs.pop('ttl', ttl)
+    suffix_key_func = key if key else default_suffix_key
+    org = get_current_org()
+    func_name = f'{func.__module__}_{func.__name__}'
+    key_suffix = suffix_key_func(*args, **kwargs)
+    cache_key = f'MERGE_DELAY_RUN_{func_name}_{key_suffix}'
+    cache_kwargs = _merge_delay_update_cache_kwargs(func, cache_key, kwargs)
+    _loop_debouncer_func_args_cache[cache_key] = cache_kwargs
+    run_debouncer_func(cache_key, org, current_ttl, func, *args, **cache_kwargs)
+
+
+def _merge_delay_apply(delay, func, sync=False, *args, **kwargs):
+    if sync:
+        return func(*args, **kwargs)
+    return delay(func, *args, **kwargs)
+
+
+def _validate_merge_delay_run_func(func):
+    sigs = inspect.signature(func)
+    if len(sigs.parameters) != 1:
+        raise ValueError('func must have one arguments: %s' % func.__name__)
+    param = list(sigs.parameters.values())[0]
+    if not isinstance(param.default, tuple):
+        raise ValueError('func default must be tuple: %s' % param.default)
 
 @delay_run(ttl=5)
 def test_delay_run():

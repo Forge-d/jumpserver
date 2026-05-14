@@ -116,28 +116,53 @@ class BaseFileParser(BaseParser):
         if value == '-' and field and field.allow_null:
             return None
         elif hasattr(field, 'to_file_internal_value'):
-            value = field.to_file_internal_value(value)
+            return self._parse_file_internal_value(field, value)
         elif isinstance(field, serializers.BooleanField):
-            value = value.lower() in ['true', '1', 'yes']
+            return self._parse_boolean_value(field, value)
         elif isinstance(field, ObjectRelatedField):
-            if field.many:
-                value = [self.id_name_to_obj(v) for v in value]
-            else:
-                value = self.id_name_to_obj(value)
+            return self._parse_object_related_value(field, value)
         elif isinstance(field, LabeledChoiceField):
-            value = self.id_name_to_obj(value)
-            if isinstance(value, dict) and 'pk' in value:
-                value = value.get('pk')
+            return self._parse_labeled_choice_value(field, value)
         elif isinstance(field, serializers.ListSerializer):
-            value = [self.parse_value(field.child, v) for v in value]
+            return self._parse_list_serializer_value(field, value)
         elif isinstance(field, serializers.Serializer):
-            value = self.id_name_to_obj(value)
+            return self._parse_serializer_value(field, value)
         elif isinstance(field, serializers.ManyRelatedField):
-            value = [self.parse_value(field.child_relation, v) for v in value]
+            return self._parse_many_related_value(field, value)
         elif isinstance(field, serializers.ListField):
-            value = [self.parse_value(field.child, v) for v in value]
-
+            return self._parse_list_field_value(field, value)
         return value
+
+    @staticmethod
+    def _parse_file_internal_value(field, value):
+        return field.to_file_internal_value(value)
+
+    @staticmethod
+    def _parse_boolean_value(field, value):
+        return value.lower() in ['true', '1', 'yes']
+
+    def _parse_object_related_value(self, field, value):
+        if field.many:
+            return [self.id_name_to_obj(v) for v in value]
+        return self.id_name_to_obj(value)
+
+    def _parse_labeled_choice_value(self, field, value):
+        value = self.id_name_to_obj(value)
+        if isinstance(value, dict) and 'pk' in value:
+            value = value.get('pk')
+        return value
+
+    def _parse_list_serializer_value(self, field, value):
+        return [self.parse_value(field.child, v) for v in value]
+
+    def _parse_serializer_value(self, field, value):
+        return self.id_name_to_obj(value)
+
+    def _parse_many_related_value(self, field, value):
+        return [self.parse_value(field.child_relation, v) for v in value]
+
+    def _parse_list_field_value(self, field, value):
+        return [self.parse_value(field.child, v) for v in value]
 
     def process_row_data(self, row_data):
         """

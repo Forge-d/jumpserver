@@ -122,26 +122,30 @@ class DatetimeRangeFilterBackend(filters.BaseFilterBackend):
 
         kwargs = {}
         for attr, date_range_keyword in fields.items():
-            if len(date_range_keyword) != 2:
-                continue
-            for i, v in enumerate(date_range_keyword):
-                value = request.query_params.get(v)
-                if not value:
-                    continue
-                try:
-                    field = DateTimeField()
-                    value = field.to_internal_value(value)
-                    if i == 0:
-                        lookup = "__gte"
-                    else:
-                        lookup = "__lte"
-                    kwargs[attr + lookup] = value
-                except ValidationError as e:
-                    print(e)
-                    continue
+            self._update_date_range_filter_kwargs(request, attr, date_range_keyword, kwargs)
         if kwargs:
             queryset = queryset.filter(**kwargs)
         return queryset
+
+    @staticmethod
+    def _update_date_range_filter_kwargs(request, attr, date_range_keyword, kwargs):
+        if len(date_range_keyword) != 2:
+            return
+        for i, v in enumerate(date_range_keyword):
+            value = request.query_params.get(v)
+            if not value:
+                continue
+            try:
+                field = DateTimeField()
+                value = field.to_internal_value(value)
+                if i == 0:
+                    lookup = "__gte"
+                else:
+                    lookup = "__lte"
+                kwargs[attr + lookup] = value
+            except ValidationError as e:
+                print(e)
+                continue
 
 
 class IDSpmFilterBackend(filters.BaseFilterBackend):

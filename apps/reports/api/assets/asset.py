@@ -8,7 +8,6 @@ from rest_framework.views import APIView
 
 from assets.const import AllTypes, Connectivity, Category
 from assets.models import Asset, Platform
-from common.permissions import IsValidLicense
 from common.utils import lazyproperty
 from rbac.permissions import RBACPermission
 from reports.mixins import DateRangeMixin
@@ -21,7 +20,7 @@ class AssetStatisticApi(DateRangeMixin, APIView):
     rbac_perms = {
         'GET': 'rbac.view_assetstatisticsreport',
     }
-    permission_classes = [RBACPermission, IsValidLicense]
+    permission_classes = [RBACPermission]
 
     @lazyproperty
     def base_qs(self):

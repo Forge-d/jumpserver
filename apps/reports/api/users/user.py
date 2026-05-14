@@ -10,7 +10,6 @@ from rest_framework.views import APIView
 
 from audits.const import LoginStatusChoices
 from audits.models import UserLoginLog
-from common.permissions import IsValidLicense
 from common.utils import lazyproperty
 from rbac.permissions import RBACPermission
 from reports.mixins import DateRangeMixin
@@ -24,7 +23,7 @@ class UserReportApi(DateRangeMixin, APIView):
     rbac_perms = {
         'GET': 'rbac.view_userloginreport',
     }
-    permission_classes = [RBACPermission, IsValidLicense]
+    permission_classes = [RBACPermission]
 
     def get_user_login_metrics(self, queryset):
         filtered_queryset = self.filter_by_date_range(queryset, 'datetime')

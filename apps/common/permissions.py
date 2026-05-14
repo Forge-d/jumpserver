@@ -86,11 +86,6 @@ class ServiceAccountSignaturePermission(permissions.BasePermission):
         return False
 
 
-class IsValidLicense(permissions.BasePermission):
-
-    def has_permission(self, request, view):
-        return settings.XPACK_LICENSE_IS_VALID
-
 
 class IsValidLicenseForWriteAction(permissions.BasePermission):
     """Allow read for all, require valid license for write operations"""

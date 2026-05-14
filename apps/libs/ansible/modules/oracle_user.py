@@ -158,31 +158,11 @@ def user_add(
         module, oracle_client, username, password, auth_type,
         default_tablespace, temporary_tablespace, update_password
 ):
-    valid, msg = validate_identifier(username)
-    if not valid:
-        module.fail_json(msg=f"Invalid username: {msg}")
-
-    if default_tablespace:
-        valid, msg = validate_identifier(default_tablespace)
-        if not valid:
-            module.fail_json(msg=f"Invalid default tablespace: {msg}")
-        default_tablespace = default_tablespace.upper()
-
-    if temporary_tablespace:
-        valid, msg = validate_identifier(temporary_tablespace)
-        if not valid:
-            module.fail_json(msg=f"Invalid temporary tablespace: {msg}")
-        temporary_tablespace = temporary_tablespace.upper()
-
+    validate_all_identifiers(module, username, default_tablespace, temporary_tablespace)
     user, err = user_find(oracle_client, username)
     if err:
         module.fail_json(msg=f"Failed to check user existence: {err}")
-
-    desired_attrs = {
-        'auth_type': auth_type.lower(),
-        'default_tablespace': default_tablespace,
-        'temporary_tablespace': temporary_tablespace,
-    }
+    desired_attrs = prepare_attrs(auth_type, default_tablespace, temporary_tablespace)
     username = username.upper()
     if user:
         current_attrs = {
@@ -190,46 +170,76 @@ def user_add(
             'default_tablespace': user['default_tablespace'],
             'temporary_tablespace': user['temporary_tablespace']
         }
-        need_change = False
-        if current_attrs['auth_type'] != desired_attrs['auth_type']:
-            need_change = True
-        if (desired_attrs['default_tablespace'] and
-                current_attrs['default_tablespace'] != desired_attrs['default_tablespace']):
-            need_change = True
-        if (desired_attrs['temporary_tablespace'] and
-                current_attrs['temporary_tablespace'] != desired_attrs['temporary_tablespace']):
-            need_change = True
-        if desired_attrs['auth_type'] == 'password' and update_password == 'always':
-            need_change = True
-        if not need_change:
+        if not need_change(current_attrs, desired_attrs, update_password):
             module.exit_json(changed=False, name=username)
-
-        sql_parts = [f"ALTER USER {username}"]
-        identified_clause = get_identified_clause(auth_type, password)
-        sql_parts.append(identified_clause)
-
-        if (desired_attrs['default_tablespace'] and
-                current_attrs['default_tablespace'] != desired_attrs['default_tablespace']):
-            sql_parts.append(f"DEFAULT TABLESPACE {desired_attrs['default_tablespace']}")
-            sql_parts.append(f"QUOTA UNLIMITED ON {desired_attrs['default_tablespace']}")
-
-        if (desired_attrs['temporary_tablespace'] and
-                current_attrs['temporary_tablespace'] != desired_attrs['temporary_tablespace']):
-            sql_parts.append(f"TEMPORARY TABLESPACE {desired_attrs['temporary_tablespace']}")
-        user_sql = " ".join(sql_parts)
+        user_sql = build_alter_user_sql(username, auth_type, password, desired_attrs, current_attrs)
+        execute_user_sql(module, oracle_client, user_sql, username)
+        grant_create_session(module, oracle_client, username, True)
     else:
-        sql_parts = [f"CREATE USER {username}"]
-        identified_clause = get_identified_clause(auth_type, password)
-        sql_parts.append(identified_clause)
+        user_sql = build_create_user_sql(username, auth_type, password, desired_attrs)
+        execute_user_sql(module, oracle_client, user_sql, username)
+        grant_create_session(module, oracle_client, username, False)
 
-        if desired_attrs['default_tablespace']:
-            sql_parts.append(f"DEFAULT TABLESPACE {desired_attrs['default_tablespace']}")
-            sql_parts.append(f"QUOTA UNLIMITED ON {desired_attrs['default_tablespace']}")
 
-        if desired_attrs['temporary_tablespace']:
-            sql_parts.append(f"TEMPORARY TABLESPACE {desired_attrs['temporary_tablespace']}")
-        user_sql = " ".join(sql_parts)
+def validate_all_identifiers(module, username, default_tablespace, temporary_tablespace):
+    valid, msg = validate_identifier(username)
+    if not valid:
+        module.fail_json(msg=f"Invalid username: {msg}")
+    dt = default_tablespace
+    if dt:
+        valid, msg = validate_identifier(dt)
+        if not valid:
+            module.fail_json(msg=f"Invalid default tablespace: {msg}")
+    tt = temporary_tablespace
+    if tt:
+        valid, msg = validate_identifier(tt)
+        if not valid:
+            module.fail_json(msg=f"Invalid temporary tablespace: {msg}")
 
+
+def prepare_attrs(auth_type, default_tablespace, temporary_tablespace):
+    return {
+        'auth_type': auth_type.lower(),
+        'default_tablespace': default_tablespace.upper() if default_tablespace else None,
+        'temporary_tablespace': temporary_tablespace.upper() if temporary_tablespace else None,
+    }
+
+
+def need_change(current_attrs, desired_attrs, update_password):
+    if current_attrs['auth_type'] != desired_attrs['auth_type']:
+        return True
+    if desired_attrs['default_tablespace'] and current_attrs['default_tablespace'] != desired_attrs['default_tablespace']:
+        return True
+    if desired_attrs['temporary_tablespace'] and current_attrs['temporary_tablespace'] != desired_attrs['temporary_tablespace']:
+        return True
+    if desired_attrs['auth_type'] == 'password' and update_password == 'always':
+        return True
+    return False
+
+
+def build_alter_user_sql(username, auth_type, password, desired_attrs, current_attrs):
+    sql_parts = [f"ALTER USER {username}"]
+    sql_parts.append(get_identified_clause(auth_type, password))
+
+    if desired_attrs['default_tablespace'] and current_attrs['default_tablespace'] != desired_attrs['default_tablespace']:
+        sql_parts.append(f"DEFAULT TABLESPACE {desired_attrs['default_tablespace']}")
+        sql_parts.append(f"QUOTA UNLIMITED ON {desired_attrs['default_tablespace']}")
+    if desired_attrs['temporary_tablespace'] and current_attrs['temporary_tablespace'] != desired_attrs['temporary_tablespace']:
+        sql_parts.append(f"TEMPORARY TABLESPACE {desired_attrs['temporary_tablespace']}")
+    return " ".join(sql_parts)
+
+
+def build_create_user_sql(username, auth_type, password, desired_attrs):
+    sql_parts = [f"CREATE USER {username}"]
+    sql_parts.append(get_identified_clause(auth_type, password))
+    if desired_attrs['default_tablespace']:
+        sql_parts.append(f"DEFAULT TABLESPACE {desired_attrs['default_tablespace']}")
+        sql_parts.append(f"QUOTA UNLIMITED ON {desired_attrs['default_tablespace']}")
+    if desired_attrs['temporary_tablespace']:
+        sql_parts.append(f"TEMPORARY TABLESPACE {desired_attrs['temporary_tablespace']}")
+    return " ".join(sql_parts)
+
+def execute_user_sql(module, oracle_client, user_sql, username):
     try:
         ret, err = oracle_client.execute(user_sql)
         if err:
@@ -237,12 +247,14 @@ def user_add(
         oracle_client.commit()
     except Exception as e:
         module.fail_json(msg=f"Database error while modifying user {username}: {str(e)}", changed=False)
-        
+
+
+def grant_create_session(module, oracle_client, username, user_exists):
     try:
         ret, err = oracle_client.execute(f'GRANT CREATE SESSION TO {username}')
         if err:
             module.fail_json(msg=f"Failed to grant create session to {username}: {err}", changed=False)
-        action = 'updated' if user else 'created'
+        action = 'updated' if user_exists else 'created'
         module.exit_json(changed=True, name=username, msg=f"User {username} {action} successfully")
     except Exception as e:
         module.fail_json(msg=f"Database error while modifying user {username}: {str(e)}", changed=False)

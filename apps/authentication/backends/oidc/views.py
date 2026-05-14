@@ -147,49 +147,77 @@ class OIDCAuthCallbackView(View, FlashMessageMixin):
         # NOTE: a redirect to the failure page should be return if some required GET parameters are
         # missing or if no state can be retrieved from the current session.
 
-        if (
-                ((nonce and settings.AUTH_OPENID_USE_NONCE) or not settings.AUTH_OPENID_USE_NONCE)
-                and
-                (
-                        (state and settings.AUTH_OPENID_USE_STATE and 'state' in callback_params)
-                        or
-                        (not settings.AUTH_OPENID_USE_STATE)
-                )
-                and
-                ('code' in callback_params)
-        ):
+        if self._can_authenticate_callback(callback_params, state, nonce):
             # Ensures that the passed state values is the same as the one that was previously
             # generated when forging the authorization request. This is necessary to mitigate
             # Cross-Site Request Forgery (CSRF, XSRF).
-            if settings.AUTH_OPENID_USE_STATE and callback_params['state'] != state:
-                logger.debug(log_prompt.format('Invalid OpenID Connect callback state value'))
-                raise SuspiciousOperation('Invalid OpenID Connect callback state value')
+            self._validate_callback_state(callback_params, state, log_prompt)
 
             # Authenticates the end-user.
-            code_verifier = request.session.get('oidc_auth_code_verifier', None)
-            logger.debug(log_prompt.format('Process authenticate'))
-            try:
-                user = auth.authenticate(nonce=nonce, request=request, code_verifier=code_verifier)
-            except IntegrityError as e:
-                msg = _('Please check if a user with the same username or email already exists')
-                logger.error(e, exc_info=True)
-                response = self.get_failed_response('/', error_title, msg)
+            user, response = self._authenticate_callback_user(request, nonce, error_title, log_prompt)
+            if response:
                 return response
             if user:
-                logger.debug(log_prompt.format('Login: {}'.format(user)))
-                auth.login(self.request, user)
-                # Stores an expiration timestamp in the user's session. This value will be used if
-                # the project is configured to periodically refresh user's token.
-                self.request.session['oidc_auth_id_token_exp_timestamp'] = \
-                    time.time() + settings.AUTH_OPENID_ID_TOKEN_MAX_AGE
-                # Stores the "session_state" value that can be passed by the OpenID Connect provider
-                # in order to maintain a consistent session state across the OP and the related
-                # relying parties (RP).
-                self.request.session['oidc_auth_session_state'] = \
-                    callback_params.get('session_state', None)
+                return self._login_user_and_redirect(request, user, callback_params, log_prompt)
+        self._logout_if_callback_error(request, callback_params, log_prompt)
+        redirect_url = settings.AUTH_OPENID_AUTHENTICATION_FAILURE_REDIRECT_URI
+        if not user and getattr(request, 'error_message', ''):
+            response = self.get_failed_response(redirect_url, title=error_title, msg=request.error_message)
+            return response
+        logger.debug(log_prompt.format('Redirect'))
+        return HttpResponseRedirect(redirect_url)
 
-                logger.debug(log_prompt.format('Redirect'))
-                return HttpResponseRedirect(settings.AUTH_OPENID_AUTHENTICATION_REDIRECT_URI)
+
+    @staticmethod
+    def _can_authenticate_callback(callback_params, state, nonce):
+        return (
+            ((nonce and settings.AUTH_OPENID_USE_NONCE) or not settings.AUTH_OPENID_USE_NONCE)
+            and
+            (
+                (state and settings.AUTH_OPENID_USE_STATE and 'state' in callback_params)
+                or
+                (not settings.AUTH_OPENID_USE_STATE)
+            )
+            and
+            ('code' in callback_params)
+        )
+
+    @staticmethod
+    def _validate_callback_state(callback_params, state, log_prompt):
+        if settings.AUTH_OPENID_USE_STATE and callback_params['state'] != state:
+            logger.debug(log_prompt.format('Invalid OpenID Connect callback state value'))
+            raise SuspiciousOperation('Invalid OpenID Connect callback state value')
+
+    def _authenticate_callback_user(self, request, nonce, error_title, log_prompt):
+        code_verifier = request.session.get('oidc_auth_code_verifier', None)
+        logger.debug(log_prompt.format('Process authenticate'))
+        try:
+            user = auth.authenticate(nonce=nonce, request=request, code_verifier=code_verifier)
+        except IntegrityError as e:
+            msg = _('Please check if a user with the same username or email already exists')
+            logger.error(e, exc_info=True)
+            response = self.get_failed_response('/', error_title, msg)
+            return None, response
+        return user, None
+
+    def _login_user_and_redirect(self, request, user, callback_params, log_prompt):
+        logger.debug(log_prompt.format('Login: {}'.format(user)))
+        auth.login(self.request, user)
+        # Stores an expiration timestamp in the user's session. This value will be used if
+        # the project is configured to periodically refresh user's token.
+        self.request.session['oidc_auth_id_token_exp_timestamp'] = \
+            time.time() + settings.AUTH_OPENID_ID_TOKEN_MAX_AGE
+        # Stores the "session_state" value that can be passed by the OpenID Connect provider
+        # in order to maintain a consistent session state across the OP and the related
+        # relying parties (RP).
+        self.request.session['oidc_auth_session_state'] = \
+            callback_params.get('session_state', None)
+
+        logger.debug(log_prompt.format('Redirect'))
+        return HttpResponseRedirect(settings.AUTH_OPENID_AUTHENTICATION_REDIRECT_URI)
+
+    @staticmethod
+    def _logout_if_callback_error(request, callback_params, log_prompt):
         if 'error' in callback_params:
             logger.debug(
                 log_prompt.format('Error in callback params: {}'.format(callback_params['error']))
@@ -200,12 +228,6 @@ class OIDCAuthCallbackView(View, FlashMessageMixin):
             # OpenID Connect Provider authenticate endpoint.
             logger.debug(log_prompt.format('Logout'))
             auth.logout(request)
-        redirect_url = settings.AUTH_OPENID_AUTHENTICATION_FAILURE_REDIRECT_URI
-        if not user and getattr(request, 'error_message', ''):
-            response = self.get_failed_response(redirect_url, title=error_title, msg=request.error_message)
-            return response
-        logger.debug(log_prompt.format('Redirect'))
-        return HttpResponseRedirect(redirect_url)
 
 
 class OIDCEndSessionView(View):

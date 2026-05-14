@@ -14,7 +14,6 @@ from accounts.models import ChangeSecretAutomation, ChangeSecretRecord, Account
 from accounts.tasks import execute_automation_record_task
 from accounts.utils import account_secret_task_status
 from authentication.permissions import UserConfirmation, ConfirmType
-from common.permissions import IsValidLicense
 from orgs.mixins.api import OrgBulkModelViewSet, OrgGenericViewSet
 from rbac.permissions import RBACPermission
 from .base import (
@@ -32,7 +31,7 @@ __all__ = [
 
 class ChangeSecretAutomationViewSet(OrgBulkModelViewSet):
     model = ChangeSecretAutomation
-    permission_classes = [RBACPermission, IsValidLicense]
+    permission_classes = [RBACPermission]
     filterset_fields = ('name', 'secret_type', 'secret_strategy')
     search_fields = filterset_fields
     serializer_class = serializers.ChangeSecretAutomationSerializer
@@ -40,7 +39,7 @@ class ChangeSecretAutomationViewSet(OrgBulkModelViewSet):
 
 class ChangeSecretRecordViewSet(mixins.ListModelMixin, OrgGenericViewSet):
     filterset_class = ChangeSecretRecordFilterSet
-    permission_classes = [RBACPermission, IsValidLicense]
+    permission_classes = [RBACPermission]
     search_fields = ('asset__address', 'account__username')
     ordering_fields = ('date_finished',)
     tp = AutomationTypes.change_secret
@@ -132,7 +131,7 @@ class ChangSecretExecutionViewSet(AutomationExecutionViewSet):
         ("create", "accounts.add_changesecretexecution"),
         ("report", "accounts.view_changesecretexecution"),
     )
-    permission_classes = [RBACPermission, IsValidLicense]
+    permission_classes = [RBACPermission]
     tp = AutomationTypes.change_secret
 
     def get_queryset(self):
@@ -164,7 +163,7 @@ class ChangeSecretStatusViewSet(OrgBulkModelViewSet):
     serializer_class = serializers.ChangeSecretAccountSerializer
     search_fields = ('username',)
 
-    permission_classes = [RBACPermission, IsValidLicense]
+    permission_classes = [RBACPermission]
     http_method_names = ["get", "delete", "options"]
 
     def get_queryset(self):
