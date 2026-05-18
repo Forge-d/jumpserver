@@ -7,7 +7,7 @@ from django.http.response import JsonResponse
 from rest_framework.views import APIView
 
 from audits.models import PasswordChangeLog
-from common.permissions import IsValidLicense
+# 
 from common.utils import lazyproperty, get_logger
 from rbac.permissions import RBACPermission
 from reports.mixins import DateRangeMixin
@@ -22,7 +22,7 @@ class UserChangeSecretApi(DateRangeMixin, APIView):
     rbac_perms = {
         'GET': 'rbac.view_userchangepasswordreport',
     }
-    permission_classes = [RBACPermission, IsValidLicense]
+    permission_classes = [RBACPermission]
 
     def get_change_password_metrics(self, queryset):
         filtered_queryset = self.filter_by_date_range(queryset, 'datetime')

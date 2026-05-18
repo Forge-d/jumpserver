@@ -38,6 +38,9 @@ class BaseChangeSecretPushManager(AccountBasePlaybookManager):
         self.account_ids = self.execution.snapshot['accounts']
         self.record_map = self.execution.snapshot.get('record_map', {})  # 这个是某个失败的记录重试
         self.name_record_mapper = {}  # 做个映射，方便后面处理
+        print(f'[DEBUG] Snapshot accounts (ids): {self.account_ids}')
+        print(f'[DEBUG] Snapshot secret_type: {self.secret_type}')
+        print(f'[DEBUG] Snapshot secret_strategy: {self.secret_strategy}')
 
     def gen_account_inventory(self, account, asset, h, path_dir):
         raise NotImplementedError
@@ -71,15 +74,33 @@ class BaseChangeSecretPushManager(AccountBasePlaybookManager):
 
         asset = privilege_account.asset
         accounts = asset.all_accounts.all()
+
+        print(f'[DEBUG] asset={asset}, login_account={privilege_account.username}')
+        print(f'[DEBUG] account_ids from snapshot={self.account_ids}')
+        print(f'[DEBUG] total accounts on asset={accounts.count()}')
+        print(f'[DEBUG] accounts on asset: {list(accounts.values_list("id", "username", "secret_type", "secret_reset", "privileged"))}')
+
+        if not self.account_ids:
+            print('[DEBUG] WARNING: account_ids is empty! '
+                  'Check the automation "accounts" (usernames) field matches actual account usernames.')
+            return accounts.none()
+
         accounts = accounts.filter(id__in=self.account_ids, secret_reset=True)
+        print(f'[DEBUG] after filter(id__in=account_ids, secret_reset=True): count={accounts.count()}')
 
         if self.secret_type:
             accounts = accounts.filter(secret_type=self.secret_type)
+            print(f'[DEBUG] after filter(secret_type={self.secret_type}): count={accounts.count()}')
 
         if settings.CHANGE_AUTH_PLAN_SECURE_MODE_ENABLED:
+            before = accounts.count()
             accounts = accounts.filter(privileged=False).exclude(
                 username__in=['root', 'administrator', privilege_account.username]
             )
+            print(f'[DEBUG] SECURE_MODE enabled, before={before}, after={accounts.count()}, '
+                  f'login_username={privilege_account.username}')
+        else:
+            print(f'[DEBUG] SECURE_MODE disabled, accounts count={accounts.count()}')
         return accounts
 
     def handle_ssh_secret(self, secret_type, new_secret, path_dir):

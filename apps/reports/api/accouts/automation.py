@@ -10,7 +10,7 @@ from rest_framework.views import APIView
 from accounts.const import AutomationTypes
 from accounts.models import ChangeSecretAutomation, PushAccountAutomation, BackupAccountAutomation, \
     CheckAccountAutomation, GatherAccountsAutomation, AutomationExecution
-from common.permissions import IsValidLicense
+
 from rbac.permissions import RBACPermission
 from reports.mixins import DateRangeMixin
 
@@ -22,7 +22,7 @@ class AccountAutomationApi(DateRangeMixin, APIView):
     rbac_perms = {
         'GET': 'rbac.view_accountautomationreport',
     }
-    permission_classes = [RBACPermission, IsValidLicense]
+    permission_classes = [RBACPermission]
 
     @property
     def change_secret_qs(self):

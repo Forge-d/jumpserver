@@ -10,7 +10,7 @@ wsl -l -v
 wsl -d Ubuntu
 
 # Move project to Ubuntu's Linux filesystem
-cp -r /mnt/c/workspace/FORGE-D/pam-workspace/jumpserver ~/jumpserver
+cp -r "/mnt/c/Users/HirenTandel/Work/IAM/Jump Server/PAM/jumpserver" ~/jumpserver
 
 # Work from there
 cd ~/jumpserver
@@ -62,7 +62,7 @@ uv run python apps/manage.py makemigrations grydd_platform
 uv run python apps/manage.py migrate grydd_platform
 
 # Then start
-uv run python jms start web
+uv run python jms start web & uv run python jms start task
 
 
 -------------------------------------------- POST App Setup for Debugging -----------------------------------------------------------------------
@@ -70,7 +70,7 @@ uv run python jms start web
 #  Keep files on Windows, use rsync to sync changes
 # Run this every time you make changes on Windows
 rsync -av --exclude='.venv' --exclude='__pycache__' \
-  /mnt/c/workspace/FORGE-D/pam-workspace/jumpserver/ \
+  "/mnt/c/Users/HirenTandel/Work/IAM/Jump Server/PAM/jumpserver/" \
   ~/jumpserver/
 
 # To override the default mapping via shell:

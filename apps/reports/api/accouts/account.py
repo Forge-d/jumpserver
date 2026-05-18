@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 from accounts.const import Source
 from accounts.models import Account, AccountTemplate
 from assets.const import Connectivity
-from common.permissions import IsValidLicense
+
 from common.utils import lazyproperty
 from rbac.permissions import RBACPermission
 from reports.api.assets.base import group_stats
@@ -25,7 +25,7 @@ class AccountStatisticApi(DateRangeMixin, APIView):
     rbac_perms = {
         'GET': 'rbac.view_accountstatisticsreport',
     }
-    permission_classes = [RBACPermission, IsValidLicense]
+    permission_classes = [RBACPermission]
 
     @lazyproperty
     def base_qs(self):

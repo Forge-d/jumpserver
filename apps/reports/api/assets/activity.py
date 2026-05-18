@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 
 from assets.const import AllTypes
 from assets.models import Asset
-from common.permissions import IsValidLicense
+
 from common.utils import lazyproperty
 from rbac.permissions import RBACPermission
 from reports.api.assets.base import group_stats
@@ -24,7 +24,7 @@ class AssetActivityApi(DateRangeMixin, APIView):
     rbac_perms = {
         'GET': 'rbac.view_assetactivityreport',
     }
-    permission_classes = [RBACPermission, IsValidLicense]
+    permission_classes = [RBACPermission]
 
     def get_asset_login_metrics(self, queryset):
         data = defaultdict(set)
