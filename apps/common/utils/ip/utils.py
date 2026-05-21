@@ -99,7 +99,17 @@ def get_ip_city(ip):
     if ':' in ip:
         return 'IPv6'
 
-    info = get_ip_city_by_ipip(ip)
+    # The ipipfree.ipdb / GeoLite2-City.mmdb files are downloaded by
+    # `requirements/static_files.sh`. In dev where that download was skipped
+    # (macOS dev w/o reachable jms-pkg endpoint), the lookup raises — which
+    # otherwise propagates through post_auth_success signals into the login
+    # view and surfaces as a generic 400 "Expecting value: line 1 column 1
+    # (char 0)" because of the `except Exception` in TokenCreateApi. Catch
+    # here so audit logging records an empty city instead of breaking login.
+    try:
+        info = get_ip_city_by_ipip(ip)
+    except Exception:
+        info = None
     if info:
         city = info.get('city') or _("Unknown")
         country = info.get('country')
@@ -108,7 +118,10 @@ def get_ip_city(ip):
         is_zh = settings.LANGUAGE_CODE.startswith('zh')
         if country == '中国' and is_zh:
             return city
-    return get_ip_city_by_geoip(ip)
+    try:
+        return get_ip_city_by_geoip(ip)
+    except Exception:
+        return None
 
 
 def lookup_domain(domain):
