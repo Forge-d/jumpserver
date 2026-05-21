@@ -200,6 +200,57 @@ class IAMCallbackView(View):
     """
 
     def get(self, request):
+        error_response = self._get_callback_error_response(request)
+        if error_response:
+            return error_response
+
+        code = request.GET.get('code')
+        code_verifier = request.session.get('oidc_code_verifier')
+        config_id = request.session.get('oidc_config_id')
+        is_stepup, next_url = self._get_callback_mode_and_next_url(request)
+
+        if not code:
+            return JsonResponse({'error': 'Missing authorization code'}, status=400)
+        if not code_verifier or not config_id:
+            return JsonResponse({'error': 'Missing OIDC session state'}, status=400)
+
+        iam_config = self._get_iam_config(config_id)
+        if isinstance(iam_config, JsonResponse):
+            return iam_config
+
+        tokens = self._exchange_tokens(request, code, code_verifier, iam_config)
+        if isinstance(tokens, JsonResponse):
+            return tokens
+
+        id_token = tokens.get('id_token')
+        access_token = tokens.get('access_token')
+        logger.info(
+            "IAM token exchange: id_token=%s access_token=%s",
+            id_token, access_token,
+        )
+        if not id_token:
+            return JsonResponse({'error': 'No id_token in response'}, status=401)
+
+        claims = self._validate_claims(id_token, iam_config)
+        if isinstance(claims, JsonResponse):
+            return claims
+
+        # ── MFA enforcement (applies to both login and step-up) ───────────────
+        iam_mfa_verified = self._check_iam_mfa_or_response(claims, iam_config, is_stepup)
+        if isinstance(iam_mfa_verified, JsonResponse):
+            return iam_mfa_verified
+
+        self._store_tokens_in_session(request, id_token, access_token)
+
+        # ── Step-up path: refresh session gates, skip re-login ───────────────
+        if is_stepup:
+            return self._handle_stepup(request, next_url, iam_mfa_verified, claims)
+
+        # ── Login path: authenticate user and establish Django session ────────
+        return self._handle_login(request, next_url, claims, iam_config, iam_mfa_verified)
+
+    @staticmethod
+    def _get_callback_error_response(request):
         returned_state = request.GET.get('state')
         stored_state = request.session.get('oidc_state')
 
@@ -212,36 +263,34 @@ class IAMCallbackView(View):
             error_desc = request.GET.get('error_description', '')
             logger.warning("IAM error: %s — %s", error, error_desc)
             return JsonResponse({'error': error, 'detail': error_desc}, status=401)
+        return None
 
-        code = request.GET.get('code')
-        if not code:
-            return JsonResponse({'error': 'Missing authorization code'}, status=400)
-
-        code_verifier = request.session.get('oidc_code_verifier')
-        config_id = request.session.get('oidc_config_id')
-
+    @staticmethod
+    def _get_callback_mode_and_next_url(request):
         # Determine mode: step-up (user already logged in) vs normal login
         stepup_next = request.session.pop('oidc_stepup_next', None)
         is_stepup = stepup_next is not None
 
         if is_stepup:
-            next_url = stepup_next
-        else:
-            next_url = request.session.pop('oidc_next', '/ui/')
-            if not next_url or next_url in ('/', '/core/auth/login/', '/core/auth/login'):
-                next_url = '/ui/'
+            return is_stepup, stepup_next
 
-        if not code_verifier or not config_id:
-            return JsonResponse({'error': 'Missing OIDC session state'}, status=400)
+        next_url = request.session.pop('oidc_next', '/ui/')
+        if not next_url or next_url in ('/', '/core/auth/login/', '/core/auth/login'):
+            next_url = '/ui/'
+        return is_stepup, next_url
 
+    @staticmethod
+    def _get_iam_config(config_id):
         from grydd_platform.models import IAMConfig
         try:
-            iam_config = IAMConfig.objects.get(id=config_id, is_active=True)
+            return IAMConfig.objects.get(id=config_id, is_active=True)
         except IAMConfig.DoesNotExist:
             return JsonResponse({'error': 'IAM config not found'}, status=500)
 
+    @staticmethod
+    def _exchange_tokens(request, code, code_verifier, iam_config):
         try:
-            tokens = exchange_code_for_tokens(
+            return exchange_code_for_tokens(
                 code=code,
                 code_verifier=code_verifier,
                 redirect_uri=get_redirect_uri(request),
@@ -251,22 +300,16 @@ class IAMCallbackView(View):
             logger.error("Token exchange failed: %s", e)
             return JsonResponse({'error': 'Token exchange failed'}, status=401)
 
-        id_token = tokens.get('id_token')
-        access_token = tokens.get('access_token')
-        logger.info(
-            "IAM token exchange: id_token=%s access_token=%s",
-            id_token, access_token,
-        )
-        if not id_token:
-            return JsonResponse({'error': 'No id_token in response'}, status=401)
-
+    @staticmethod
+    def _validate_claims(id_token, iam_config):
         try:
-            claims = validate_id_token(id_token, iam_config)
+            return validate_id_token(id_token, iam_config)
         except Exception as e:
             logger.error("Token validation failed: %s", e)
             return JsonResponse({'error': 'Token validation failed'}, status=401)
 
-        # ── MFA enforcement (applies to both login and step-up) ───────────────
+    @staticmethod
+    def _check_iam_mfa_or_response(claims, iam_config, is_stepup):
         iam_mfa_verified = check_iam_mfa_from_claims(claims, iam_config)
         if not iam_mfa_verified:
             requested_acr = iam_config.require_mfa_acr or 'urn:iam:acr:2fa:any'
@@ -279,23 +322,27 @@ class IAMCallbackView(View):
                 {'error': 'MFA required by IAM policy was not completed'},
                 status=401,
             )
+        return iam_mfa_verified
 
+    @staticmethod
+    def _store_tokens_in_session(request, id_token, access_token):
         for key in ['oidc_code_verifier', 'oidc_state', 'oidc_config_id']:
             request.session.pop(key, None)
         request.session['oidc_id_token_hint'] = id_token
         request.session['oidc_access_token'] = access_token
 
-        # ── Step-up path: refresh session gates, skip re-login ───────────────
-        if is_stepup:
-            if request.user.is_anonymous:
-                logger.warning("Step-up callback reached with anonymous user — aborting")
-                return JsonResponse({'error': 'Session expired, please log in again'}, status=401)
+    @staticmethod
+    def _handle_stepup(request, next_url, iam_mfa_verified, claims):
+        if request.user.is_anonymous:
+            logger.warning("Step-up callback reached with anonymous user — aborting")
+            return JsonResponse({'error': 'Session expired, please log in again'}, status=401)
 
-            _set_iam_mfa_session(request, request.user, iam_mfa_verified, claims)
-            logger.info("IAM step-up complete: user=%s next=%r", request.user.username, next_url)
-            return HttpResponseRedirect(next_url)
+        _set_iam_mfa_session(request, request.user, iam_mfa_verified, claims)
+        logger.info("IAM step-up complete: user=%s next=%r", request.user.username, next_url)
+        return HttpResponseRedirect(next_url)
 
-        # ── Login path: authenticate user and establish Django session ────────
+    @staticmethod
+    def _handle_login(request, next_url, claims, iam_config, iam_mfa_verified):
         from django.contrib.auth import authenticate
         user = authenticate(request, iam_claims=claims, iam_config=iam_config)
 

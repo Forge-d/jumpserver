@@ -26,6 +26,22 @@ class Stack(list):
     def push(self, item):
         self.append(item)
 
+def _queryset_chain_get_index_args(ndx, total_count):
+    if isinstance(ndx, slice):
+        return ndx.start or 0, ndx.stop or total_count, ndx.step or 1
+    return ndx, None, None
+
+def _queryset_chain_get_start(length, ndx_start, pre_length):
+    return ndx_start - pre_length
+
+def _queryset_chain_should_continue_current_queryset(length, ndx_start):
+    return ndx_start >= length
+
+def _queryset_chain_get_stop(ndx_stop, length, pre_length, count):
+    if ndx_stop < length:
+        return ndx_stop - pre_length
+    return count
+
 
 class QuerySetChain:
     def __init__(self, querysets):
@@ -57,13 +73,7 @@ class QuerySetChain:
         items = []  # 返回的值
         loop = 0
 
-        if isinstance(ndx, slice):
-            ndx_start = ndx.start or 0
-            ndx_stop = ndx.stop or self.total_count
-            ndx_step = ndx.step or 1
-        else:
-            ndx_start = ndx
-            ndx_stop, ndx_step = None, None
+        ndx_start, ndx_stop, ndx_step = _queryset_chain_get_index_args(ndx, self.total_count)
 
         for queryset, count in querysets_count_zip:
             length += count
@@ -71,12 +81,12 @@ class QuerySetChain:
             # 取当前数组的start角标, 存在3中情况
             # 1. start角标在当前数组
             if length > ndx_start >= pre_length:
-                start = ndx_start - pre_length
+                start = _queryset_chain_get_start(length, ndx_start, pre_length)
                 # print("[loop {}] Start is: {}".format(loop, start))
                 if ndx_step is None:
                     return queryset[start]
             # 2. 不包含当前数组，因为起始已经超过了当前数组的长度
-            elif ndx_start >= length:
+            elif _queryset_chain_should_continue_current_queryset(length, ndx_start):
                 pre_length += count
                 continue
             # 3. 不在当前数组，但是应该从当前数组0开始计算
@@ -91,11 +101,7 @@ class QuerySetChain:
             # 取当前数组的stop角标, 存在2中情况
             # 不存在第3中情况是因为找到了会提交结束循环
             # 1. 结束角标小于length代表 结束位在当前数组上
-            if ndx_stop < length:
-                stop = ndx_stop - pre_length
-            # 2. 结束位置包含改数组到了最后
-            else:
-                stop = count
+            stop = _queryset_chain_get_stop(ndx_stop, length, pre_length, count)
             # print("[loop {}] Slice: {} {} {}".format(loop, start, stop, ndx_step))
             items.extend(list(queryset[slice(start, stop, ndx_step)]))
             pre_length += count

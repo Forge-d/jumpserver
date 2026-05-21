@@ -109,6 +109,15 @@ class DefaultCallback:
         self.result[error_key][host][task] = detail
 
     @staticmethod
+    def _find_task_start(lines, line_no):
+        """Scan backwards from line_no to find the index and indent of the enclosing task block."""
+        for idx in range(line_no - 1, -1, -1):
+            if lines[idx].lstrip(" \t").startswith("- "):
+                start_indent = len(lines[idx]) - len(lines[idx].lstrip(" \t"))
+                return idx, start_indent
+        return None, 0
+
+    @staticmethod
     def _task_path_ignores_unreachable(task_path):
         if not task_path or ":" not in task_path:
             return False
@@ -126,18 +135,7 @@ class DefaultCallback:
             return False
 
         line_no = max(1, min(line_no, len(lines)))
-
-        def is_task_start(line):
-            stripped = line.lstrip(" \t")
-            return stripped.startswith("- ")
-
-        start_idx = None
-        start_indent = 0
-        for idx in range(line_no - 1, -1, -1):
-            if is_task_start(lines[idx]):
-                start_idx = idx
-                start_indent = len(lines[idx]) - len(lines[idx].lstrip(" \t"))
-                break
+        start_idx, start_indent = DefaultCallback._find_task_start(lines, line_no)
 
         if start_idx is None:
             return False

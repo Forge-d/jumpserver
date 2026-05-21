@@ -340,22 +340,12 @@ class ES(object):
         return props.get(field, {}).get("type") == "long"
 
     def get_query_body(self, **kwargs):
-        new_kwargs = {}
-        for k, v in kwargs.items():
-            if isinstance(v, UUID):
-                v = str(v)
-            if k == 'pk':
-                k = 'id'
-            if k.endswith('__in'):
-                k = k.replace('__in', '')
-            new_kwargs[k] = v
-        kwargs = new_kwargs
+        kwargs = self._normalize_query_kwargs(kwargs)
 
         index_in_field = 'id__in'
         keyword_fields = self.keyword_fields
         exact_fields = self.exact_fields
         match_fields = self.match_fields
-        fuzzy_fields = self.fuzzy_fields
 
         match = {}
         search = []
@@ -366,43 +356,75 @@ class ES(object):
         if index_in_field in kwargs:
             index['values'] = kwargs[index_in_field]
 
-        mapping = self.es.indices.get_mapping(index=self.index)
-        props = (
-            mapping
-            .get(self.index, {})
-            .get('mappings', {})
-            .get('properties', {})
-        )
+        props = self._get_query_properties()
 
         common_keyword_able = exact_fields | keyword_fields
 
         for k, v in kwargs.items():
-            if k in ("org_id", "session") and self.is_keyword(props, k):
-                exact[k] = v
-
-            elif self.is_long(props, k):
-                exact[k] = v
-
-            elif k in common_keyword_able:
-                exact[f"{k}.keyword"] = v
-
-            elif k in fuzzy_fields:
-                fuzzy[f"{k}.keyword"] = v
-
-            elif k in match_fields:
-                match[k] = v
+            self._handle_query_field(
+                k, v, props, common_keyword_able, exact, fuzzy, match,
+            )
 
         args = kwargs.get('search', [])
-        for item in args:
-            for k, v in item.items():
-                if k in match_fields:
-                    search.append(item)
+        self._append_search_items(args, match_fields, search)
 
         # 处理时间
         time_field_name, time_range = self.handler_time_field(kwargs)
 
         # 处理组织
         should = []
+        self._handle_org_should(match, should)
+
+        # 构建 body
+        return self._build_query_body(
+            should, match, search, exact, fuzzy, time_field_name, time_range, index,
+        )
+
+
+
+    @staticmethod
+    def _normalize_query_kwargs(kwargs):
+        new_kwargs = {}
+        for k, v in kwargs.items():
+            if isinstance(v, UUID):
+                v = str(v)
+            if k == 'pk':
+                k = 'id'
+            if k.endswith('__in'):
+                k = k.replace('__in', '')
+            new_kwargs[k] = v
+        return new_kwargs
+
+    def _get_query_properties(self):
+        mapping = self.es.indices.get_mapping(index=self.index)
+        return (
+            mapping
+            .get(self.index, {})
+            .get('mappings', {})
+            .get('properties', {})
+        )
+
+    def _handle_query_field(self, k, v, props, common_keyword_able, exact, fuzzy, match):
+        if k in ("org_id", "session") and self.is_keyword(props, k):
+            exact[k] = v
+        elif self.is_long(props, k):
+            exact[k] = v
+        elif k in common_keyword_able:
+            exact[f"{k}.keyword"] = v
+        elif k in self.fuzzy_fields:
+            fuzzy[f"{k}.keyword"] = v
+        elif k in self.match_fields:
+            match[k] = v
+
+    @staticmethod
+    def _append_search_items(args, match_fields, search):
+        for item in args:
+            for k, v in item.items():
+                if k in match_fields:
+                    search.append(item)
+
+    @staticmethod
+    def _handle_org_should(match, should):
         org_id = match.get('org_id')
 
         real_default_org_id = '00000000-0000-0000-0000-000000000002'
@@ -422,7 +444,7 @@ class ES(object):
             })
             should.append({'match': {'org_id': real_default_org_id}})
 
-        # 构建 body
+    def _build_query_body(self, should, match, search, exact, fuzzy, time_field_name, time_range, index):
         body = {
             'query': {
                 'bool': {
@@ -568,25 +590,35 @@ class QuerySet(DJQuerySet):
         return attr
 
     def __getitem__(self, item):
-        max_window = self.max_result_window
         if isinstance(item, slice):
-            if self._slice is None:
-                clone = self.__clone()
-                from_ = item.start or 0
-                if item.stop is None:
-                    size = self.max_result_window - from_
-                else:
-                    size = item.stop - from_
-
-                if from_ + size > max_window:
-                    if from_ >= max_window:
-                        from_ = max_window
-                        size = 0
-                    else:
-                        size = max_window - from_
-                clone._slice = (from_, size)
+            clone = self.__clone_for_slice(item)
+            if clone is not None:
                 return clone
         return self.__execute()[item]
+
+    def __get_slice_bounds(self, item):
+        max_window = self.max_result_window
+        from_ = item.start or 0
+        if item.stop is None:
+            size = self.max_result_window - from_
+        else:
+            size = item.stop - from_
+
+        if from_ + size > max_window:
+            if from_ >= max_window:
+                from_ = max_window
+                size = 0
+            else:
+                size = max_window - from_
+        return from_, size
+
+    def __clone_for_slice(self, item):
+        if self._slice is not None:
+            return None
+
+        clone = self.__clone()
+        clone._slice = self.__get_slice_bounds(item)
+        return clone
 
     def __repr__(self):
         return self.__execute().__repr__()

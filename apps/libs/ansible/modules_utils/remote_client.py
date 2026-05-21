@@ -201,6 +201,29 @@ class SSHClient:
 
         return bool(expression.search(content))
 
+    def _try_recv_chunk(self):
+        """Read one chunk from the channel if data is ready; return empty string otherwise."""
+        if self.channel.recv_ready():
+            return self.channel.recv(self.buffer_size).decode('utf-8', 'replace')
+        return ''
+
+    def _should_break(self, buffer_str, prev_str, last_change_ts, use_regex_match, check_reg):
+        """Return True when the recv loop should stop accumulating output."""
+        changed = buffer_str and buffer_str != prev_str
+        if changed:
+            if use_regex_match:
+                return self.__match(check_reg, buffer_str)
+            # Wait for a brief quiet period to approximate completion
+            return time.time() - last_change_ts > 0.3
+        if not use_regex_match and buffer_str:
+            # In quiet mode with some data already seen, also break after
+            # a brief quiet window even if buffer hasn't changed this loop.
+            return time.time() - last_change_ts > 0.3
+        if not use_regex_match and not buffer_str:
+            # No data at all in quiet mode; bail after short wait
+            return time.time() - last_change_ts > 1.0
+        return False
+
     @raise_timeout('Recv message')
     def _get_match_recv(self, answer_reg=DEFAULT_RE):
         buffer_str = ''
@@ -209,35 +232,18 @@ class SSHClient:
 
         # Quiet-mode reading only when explicitly requested, or when both
         # answer regex and prompt are permissive defaults.
-        use_regex_match = True
-        if answer_reg == DEFAULT_RE and self.prompt == DEFAULT_RE:
-            use_regex_match = False
-
+        use_regex_match = (
+            answer_reg != DEFAULT_RE or self.prompt != DEFAULT_RE
+        )
         check_reg = self.prompt if answer_reg == DEFAULT_RE else answer_reg
         while True:
-            if self.channel.recv_ready():
-                chunk = self.channel.recv(self.buffer_size).decode('utf-8', 'replace')
-                if chunk:
-                    buffer_str += chunk
-                    last_change_ts = time.time()
+            chunk = self._try_recv_chunk()
+            if chunk:
+                buffer_str += chunk
+                last_change_ts = time.time()
 
-            if buffer_str and buffer_str != prev_str:
-                if use_regex_match:
-                    if self.__match(check_reg, buffer_str):
-                        break
-                else:
-                    # Wait for a brief quiet period to approximate completion
-                    if time.time() - last_change_ts > 0.3:
-                        break
-            elif not use_regex_match and buffer_str:
-                # In quiet mode with some data already seen, also break after
-                # a brief quiet window even if buffer hasn't changed this loop.
-                if time.time() - last_change_ts > 0.3:
-                    break
-            elif not use_regex_match and not buffer_str:
-                # No data at all in quiet mode; bail after short wait
-                if time.time() - last_change_ts > 1.0:
-                    break
+            if self._should_break(buffer_str, prev_str, last_change_ts, use_regex_match, check_reg):
+                break
 
             prev_str = buffer_str
             time.sleep(0.01)

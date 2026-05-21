@@ -83,6 +83,34 @@ def _po_translated_dict(po: polib.POFile) -> dict[str, str]:
     return {e.msgid: e.msgstr for e in po.translated_entries()}
 
 
+def _get_po_entries_to_update(
+    trans_po: polib.POFile,
+    changed_msgids: set[str],
+    zh_dict: dict[str, str],
+    overwrite: bool,
+) -> dict[str, str]:
+    to_update: dict[str, str] = {}
+    for msgid in changed_msgids:
+        if msgid not in zh_dict:
+            continue
+        entry = trans_po.find(msgid)
+        if not entry:
+            continue
+        if overwrite or (not entry.msgstr) or ("fuzzy" in entry.flags):
+            to_update[msgid] = zh_dict[msgid]
+    return to_update
+
+
+def _apply_translated_po_entries(trans_po: polib.POFile, translated: dict[str, str]):
+    for msgid, msgstr in translated.items():
+        entry = trans_po.find(msgid)
+        if not entry:
+            continue
+        entry.flags = []
+        entry.previous_msgid = None
+        entry.msgstr = msgstr
+
+
 def _changed_msgids_po(base_po: polib.POFile | None, head_po: polib.POFile) -> set[str]:
     base = _po_translated_dict(base_po) if base_po else {}
     head = _po_translated_dict(head_po)
@@ -170,27 +198,11 @@ async def _translate_po_item(
             continue
 
         trans_po = _read_po_from_fs(target_path)
-        to_update: dict[str, str] = {}
-
-        for msgid in changed_msgids:
-            if msgid not in zh_dict:
-                continue
-            entry = trans_po.find(msgid)
-            if not entry:
-                continue
-            if overwrite or (not entry.msgstr) or ("fuzzy" in entry.flags):
-                to_update[msgid] = zh_dict[msgid]
-
+        to_update = _get_po_entries_to_update(trans_po, changed_msgids, zh_dict, overwrite)
         if not to_update:
             continue
         translated = await mgr.bulk_translate(to_update, target_lang)
-        for msgid, msgstr in translated.items():
-            entry = trans_po.find(msgid)
-            if not entry:
-                continue
-            entry.flags = []
-            entry.previous_msgid = None
-            entry.msgstr = msgstr
+        _apply_translated_po_entries(trans_po, translated)
         trans_po.save(str(target_path))
 
 

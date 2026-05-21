@@ -106,85 +106,171 @@ class BaseFileRenderer(LogMixin, BaseRenderer):
 
     def render_value(self, field, value):
         if value is None:
-            value = '-'
+            value = self._render_none_value()
         elif hasattr(field, 'to_file_representation'):
-            value = field.to_file_representation(value)
+            value = self._render_file_representation(field, value)
         elif isinstance(value, bool):
-            value = 'Yes' if value else 'No'
+            value = self._render_bool_value(value)
         elif isinstance(field, common_fields.LabeledChoiceField):
-            value = value or {}
-            value = '{}({})'.format(value.get('label'), value.get('value'))
+            value = self._render_labeled_choice_value(value)
         elif isinstance(field, common_fields.ObjectRelatedField):
-            if field.many:
-                value = [self.to_id_name(v) for v in value]
-            else:
-                value = self.to_id_name(value)
-        elif isinstance(field, serializers.ListSerializer):
-            value = [self.render_value(field.child, v) for v in value]
+            value = self._render_object_related_value(field, value)
+        elif self._is_list_like_field(field):
+            value = self._render_list_like_value(field, value)
         elif isinstance(field, serializers.Serializer) and value.get('id'):
-            value = self.to_id_name(value)
+            value = self._render_serializer_with_id_value(value)
         elif isinstance(field, serializers.ManyRelatedField):
-            value = [self.render_value(field.child_relation, v) for v in value]
-        elif isinstance(field, serializers.ListField):
-            value = [self.render_value(field.child, v) for v in value]
+            value = self._render_many_related_value(field, value)
+        value = self._render_stringify_value(value)
+        return value
 
+    @staticmethod
+    def _is_list_like_field(field):
+        return isinstance(field, serializers.ListSerializer) or isinstance(field, serializers.ListField)
+
+    def _render_list_like_value(self, field, value):
+        # Handles both ListSerializer and ListField
+        child = getattr(field, 'child', None) or getattr(field, 'child_relation', None)
+        if child is not None:
+            return [self.render_value(child, v) for v in value]
+        return value
+
+    @staticmethod
+    def _render_stringify_value(value):
         if not isinstance(value, str):
             value = json.dumps(value, cls=encoders.JSONEncoder, ensure_ascii=False)
         return str(value)
+
+    @staticmethod
+    def _render_none_value():
+        return '-'
+
+    @staticmethod
+    def _render_file_representation(field, value):
+        return field.to_file_representation(value)
+
+    @staticmethod
+    def _render_bool_value(value):
+        return 'Yes' if value else 'No'
+
+    @staticmethod
+    def _render_labeled_choice_value(value):
+        value = value or {}
+        return '{}({})'.format(value.get('label'), value.get('value'))
+
+    def _render_object_related_value(self, field, value):
+        if field.many:
+            return [self.to_id_name(v) for v in value]
+        return self.to_id_name(value)
+
+    def _render_list_serializer_value(self, field, value):
+        return [self.render_value(field.child, v) for v in value]
+
+    @staticmethod
+    def _render_serializer_with_id_value(value):
+        return BaseFileRenderer.to_id_name(value)
+
+    def _render_many_related_value(self, field, value):
+        return [self.render_value(field.child_relation, v) for v in value]
+
+    def _render_list_field_value(self, field, value):
+        return [self.render_value(field.child, v) for v in value]
 
     def get_field_help_text(self, field):
         text = ''
         if hasattr(field, 'get_render_help_text'):
             text = field.get_render_help_text()
-        # boolean field
         elif isinstance(field, serializers.BooleanField):
-            text = _('Yes/No')
-        # integer fields
+            text = self._help_text_boolean(field)
         elif isinstance(field, serializers.IntegerField):
-            text = _('Number, min {} max {}').format(field.min_value, field.max_value)
-            text = text.replace('min None', '').replace('max None', '')
-        # char fields
+            text = self._help_text_integer(field)
         elif isinstance(field, serializers.IPAddressField):
-            text = _('IP')
+            text = self._help_text_ip(field)
         elif isinstance(field, common_fields.PhoneField):
-            text = _("Phone number, format +8612345678901")
+            text = self._help_text_phone(field)
         elif isinstance(field, serializers.CharField):
-            if field.max_length:
-                text = _('Text, max length {}').format(field.max_length)
-            else:
-                text = _("Long text, no length limit")
-        # date fields
+            text = self._help_text_char(field)
         elif isinstance(field, serializers.DateTimeField):
-            text = _('Datetime format {}').format(timezone.now().strftime(settings.REST_FRAMEWORK['DATETIME_FORMAT']))
-        # choice fields
+            text = self._help_text_datetime(field)
         elif isinstance(field, common_fields.LabeledChoiceField):
-            text = _('Label, format ["key:value"]')
+            text = self._help_text_labeled_choice(field)
         elif isinstance(field, serializers.ChoiceField):
-            choices = [str(v) for v in field.choices.keys()]
-            if isinstance(field, common_fields.LabeledChoiceField):
-                text = _("Choices, format name(value), name is optional for human read,"
-                         " value is requisite, options {}").format(','.join(choices))
-            else:
-                text = _("Choices, options {}").format(",".join(choices))
-        # related fields
+            text = self._help_text_choice(field)
         elif isinstance(field, common_fields.ObjectRelatedField):
-            text = _("Object, format name(id), name is optional for human read, id is requisite")
+            text = self._help_text_object_related(field)
         elif isinstance(field, serializers.PrimaryKeyRelatedField):
-            text = _('Object, format id')
+            text = self._help_text_primary_key_related(field)
         elif isinstance(field, serializers.ManyRelatedField):
-            child_relation_class_name = field.child_relation.__class__.__name__
-            if child_relation_class_name == "ObjectRelatedField":
-                text = _('Objects, format ["name(id)", ...], name is optional for human read, id is requisite')
-            elif child_relation_class_name == "LabelRelatedField":
-                text = _('Labels, format ["key:value", ...], if label not exists, will create it')
-            else:
-                text = _('Objects, format ["id", ...]')
-        # list serializer
+            text = self._help_text_many_related(field)
         elif isinstance(field, serializers.ListSerializer):
-            child = field.child
-            if hasattr(child, 'get_render_help_text'):
-                text = child.get_render_help_text()
+            text = self._help_text_list_serializer(field)
         return text
+
+    @staticmethod
+    def _help_text_boolean(field):
+        return _('Yes/No')
+
+    @staticmethod
+    def _help_text_integer(field):
+        text = _('Number, min {} max {}').format(field.min_value, field.max_value)
+        return text.replace('min None', '').replace('max None', '')
+
+    @staticmethod
+    def _help_text_ip(field):
+        return _('IP')
+
+    @staticmethod
+    def _help_text_phone(field):
+        return _("Phone number, format +8612345678901")
+
+    @staticmethod
+    def _help_text_char(field):
+        if field.max_length:
+            return _('Text, max length {}').format(field.max_length)
+        else:
+            return _("Long text, no length limit")
+
+    @staticmethod
+    def _help_text_datetime(field):
+        return _('Datetime format {}').format(timezone.now().strftime(settings.REST_FRAMEWORK['DATETIME_FORMAT']))
+
+    @staticmethod
+    def _help_text_labeled_choice(field):
+        return _('Label, format ["key:value"]')
+
+    @staticmethod
+    def _help_text_choice(field):
+        choices = [str(v) for v in field.choices.keys()]
+        if isinstance(field, common_fields.LabeledChoiceField):
+            return _("Choices, format name(value), name is optional for human read,"
+                     " value is requisite, options {}" ).format(','.join(choices))
+        else:
+            return _( "Choices, options {}" ).format(",".join(choices))
+
+    @staticmethod
+    def _help_text_object_related(field):
+        return _( "Object, format name(id), name is optional for human read, id is requisite" )
+
+    @staticmethod
+    def _help_text_primary_key_related(field):
+        return _('Object, format id')
+
+    @staticmethod
+    def _help_text_many_related(field):
+        child_relation_class_name = field.child_relation.__class__.__name__
+        if child_relation_class_name == "ObjectRelatedField":
+            return _('Objects, format ["name(id)", ...], name is optional for human read, id is requisite')
+        elif child_relation_class_name == "LabelRelatedField":
+            return _('Labels, format ["key:value", ...], if label not exists, will create it')
+        else:
+            return _('Objects, format ["id", ...]')
+
+    @staticmethod
+    def _help_text_list_serializer(field):
+        child = field.child
+        if hasattr(child, 'get_render_help_text'):
+            return child.get_render_help_text()
+        return ''
 
     def generate_rows(self, data, render_fields):
         for item in data:

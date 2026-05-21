@@ -52,29 +52,37 @@ def contains_ip(ip, ip_group):
 
     """
 
-    if '*' in ip_group:
+    if _contains_ip_star(ip_group):
         return True
-
     for _ip in ip_group:
-        if is_ip_address(_ip):
-            # 192.168.10.1
-            if ip == _ip:
-                return True
-        elif is_ip_network(_ip) and is_ip_address(ip):
-            # 192.168.1.0/24
-            if ip_address(ip) in ip_network(_ip):
-                return True
-        elif is_ip_segment(_ip) and is_ip_address(ip):
-            # 10.1.1.1-10.1.1.20
-            if in_ip_segment(ip, _ip):
-                return True
-        else:
-            # address / host
-            if ip == _ip:
-                return True
+        if _contains_ip_address(ip, _ip):
+            return True
+        elif _contains_ip_network(ip, _ip):
+            return True
+        elif _contains_ip_segment(ip, _ip):
+            return True
+        elif _contains_ip_host(ip, _ip):
+            return True
 
     return False
 
+def _contains_ip_star(ip_group):
+    return '*' in ip_group
+
+def _contains_ip_address(ip, _ip):
+    # 192.168.10.1
+    return is_ip_address(_ip) and ip == _ip
+
+def _contains_ip_network(ip, _ip):
+    # 192.168.1.0/24
+    return is_ip_network(_ip) and is_ip_address(ip) and ip_address(ip) in ip_network(_ip)
+
+def _contains_ip_segment(ip, _ip):
+    # 10.1.1.1-10.1.1.20
+    return is_ip_segment(_ip) and is_ip_address(ip) and in_ip_segment(ip, _ip)
+
+def _contains_ip_host(ip, _ip):
+    return ip == _ip
 
 def is_ip(self, ip, rule_value):
     if rule_value == '*':

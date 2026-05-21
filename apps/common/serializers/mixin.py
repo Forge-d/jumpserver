@@ -155,9 +155,35 @@ class BulkListSerializerMixin:
         if self.instance is None:
             return super().to_internal_value(data)
 
+        data = self._normalize_internal_value_data(data)
+        self._validate_internal_value_data(data)
+
+        ret = []
+        errors = []
+
+        for item in data:
+            try:
+                # prepare child serializer to only handle one instance
+                validated = self._run_child_validation(item)
+            except ValidationError as exc:
+                errors.append(exc.detail)
+            except ObjectDoesNotExist as e:
+                errors.append(e)
+            else:
+                ret.append(validated)
+                errors.append({})
+
+        if any(errors):
+            raise ValidationError(errors)
+
+        return ret
+
+    def _normalize_internal_value_data(self, data):
         if html.is_html_input(data):
             data = html.parse_html_list(data)
+        return data
 
+    def _validate_internal_value_data(self, data):
         if not isinstance(data, list):
             message = self.error_messages["not_a_list"].format(
                 input_type=type(data).__name__
@@ -175,35 +201,20 @@ class BulkListSerializerMixin:
                 {api_settings.NON_FIELD_ERRORS_KEY: [message]}, code="empty"
             )
 
-        ret = []
-        errors = []
+    @staticmethod
+    def _get_item_pk(item):
+        if "id" in item:
+            return item["id"]
+        if "pk" in item:
+            return item["pk"]
+        raise ValidationError("id or pk not in data")
 
-        for item in data:
-            try:
-                # prepare child serializer to only handle one instance
-                if "id" in item:
-                    pk = item["id"]
-                elif "pk" in item:
-                    pk = item["pk"]
-                else:
-                    raise ValidationError("id or pk not in data")
-                child = self.instance.get(pk=pk)
-                self.child.instance = child
-                self.child.initial_data = item
-                # raw
-                validated = self.child.run_validation(item)
-            except ValidationError as exc:
-                errors.append(exc.detail)
-            except ObjectDoesNotExist as e:
-                errors.append(e)
-            else:
-                ret.append(validated)
-                errors.append({})
-
-        if any(errors):
-            raise ValidationError(errors)
-
-        return ret
+    def _run_child_validation(self, item):
+        pk = self._get_item_pk(item)
+        child = self.instance.get(pk=pk)
+        self.child.instance = child
+        self.child.initial_data = item
+        return self.child.run_validation(item)
 
     def create(self, validated_data):
         ModelClass = self.child.Meta.model
@@ -327,33 +338,54 @@ class DefaultValueFieldsMixin:
         self.set_fields_default_value()
 
     def set_fields_default_value(self):
-        if not hasattr(self, "Meta"):
+        model = self._get_default_value_model()
+        if model is None:
             return
-        if not hasattr(self.Meta, "model"):
-            return
-        model = self.Meta.model
 
         for name, serializer_field in self.fields.items():
-            if serializer_field.default != empty or serializer_field.required:
+            if not self._can_set_field_default(name, serializer_field):
                 continue
-            model_field = getattr(model, name, None)
-            if model_field is None:
+            default = self._get_model_field_default(model, name)
+            if default == NOT_PROVIDED:
                 continue
-            if (
-                    not hasattr(model_field, "field")
-                    or not hasattr(model_field.field, "default")
-                    or model_field.field.default == NOT_PROVIDED
-            ):
-                continue
-            if name == "id":
-                continue
-            default = model_field.field.default
-
-            if callable(default):
-                default = default()
+            default = self._resolve_field_default(default)
             if default == "":
                 continue
             serializer_field.default = default
+
+    def _get_default_value_model(self):
+        if not hasattr(self, "Meta"):
+            return None
+        if not hasattr(self.Meta, "model"):
+            return None
+        return self.Meta.model
+
+    @staticmethod
+    def _can_set_field_default(name, serializer_field):
+        if serializer_field.default != empty or serializer_field.required:
+            return False
+        if name == "id":
+            return False
+        return True
+
+    @staticmethod
+    def _get_model_field_default(model, name):
+        model_field = getattr(model, name, None)
+        if model_field is None:
+            return NOT_PROVIDED
+        if (
+                not hasattr(model_field, "field")
+                or not hasattr(model_field.field, "default")
+                or model_field.field.default == NOT_PROVIDED
+        ):
+            return NOT_PROVIDED
+        return model_field.field.default
+
+    @staticmethod
+    def _resolve_field_default(default):
+        if callable(default):
+            default = default()
+        return default
 
 
 class DynamicFieldsMixin:

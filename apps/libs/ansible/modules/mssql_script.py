@@ -271,6 +271,86 @@ def clean_output(o):
     return str(o)
 
 
+def _build_login_querystring(login_host, login_port):
+    if login_port != 1433:
+        return "%s:%s" % (login_host, login_port)
+    return login_host
+
+
+def _connect_db(module, login_user, login_password, login_querystring, db, encryption, tds_version):
+    try:
+        conn = pymssql.connect(
+            user=login_user, password=login_password, host=login_querystring,
+            database=db, encryption=encryption, tds_version=tds_version)
+        cursor = conn.cursor()
+        return conn, cursor
+    except Exception as e:
+        if "Unknown database" in str(e):
+            errno, errstr = e.args
+            module.fail_json(msg="ERROR: %s %s" % (errno, errstr))
+        else:
+            module.fail_json(
+                msg="unable to connect, check login_user and login_password are correct, or alternatively check your "
+                    "@sysconfdir@/freetds.conf / ${HOME}/.freetds.conf")
+
+
+def _parse_batches(script):
+    """Split a SQL script on GO separators, returning a list of batch strings."""
+    queries = []
+    current_batch = []
+    for statement in script.splitlines(True):
+        # Ignore the Byte Order Mark, if found
+        if statement.strip() == '\uFEFF':
+            continue
+        # Assume each 'GO' is on its own line but may have leading/trailing whitespace
+        # and be of mixed-case
+        if statement.strip().upper() != 'GO':
+            current_batch.append(statement)
+        else:
+            queries.append(''.join(current_batch))
+            current_batch = []
+    if len(current_batch) > 0:
+        queries.append(''.join(current_batch))
+    return queries
+
+
+def _is_no_resultset_error(e):
+    return (
+        type(e).__name__ == 'OperationalError' and
+        str(e) == 'Statement not executed or executed statement has no resultset'
+    )
+
+
+def _fetch_query_result(cursor):
+    qry_result = []
+    rows = cursor.fetchall()
+    while rows:
+        qry_result.append(rows)
+        rows = cursor.fetchall()
+    return qry_result
+
+
+def _execute_queries(module, cursor, conn, queries, sql_params, transaction, result):
+    query_results = []
+    for query in queries:
+        # Catch and exit on any bad query errors
+        try:
+            cursor.execute(query, sql_params)
+            query_results.append(_fetch_query_result(cursor))
+        except Exception as e:
+            # We know we executed the statement so this error just means we have no resultset
+            # which is ok (eg UPDATE/INSERT)
+            if _is_no_resultset_error(e):
+                query_results.append([])
+            else:
+                # Rollback transaction before failing the module in case of error
+                if transaction:
+                    conn.rollback()
+                error_msg = '%s: %s' % (type(e).__name__, str(e))
+                module.fail_json(msg="query failed", query=query, error=error_msg, **result)
+    return query_results
+
+
 def main():
     module_args = dict(
         name=dict(aliases=['db'], default=''),
@@ -308,27 +388,13 @@ def main():
     tds_version = module.params['tds_version'] or None
     encryption = module.params['encryption'] or None
 
-    login_querystring = login_host
-    if login_port != 1433:
-        login_querystring = "%s:%s" % (login_host, login_port)
+    login_querystring = _build_login_querystring(login_host, login_port)
 
     if login_user is not None and login_password is None:
         module.fail_json(
             msg="when supplying login_user argument, login_password must also be provided")
 
-    try:
-        conn = pymssql.connect(
-            user=login_user, password=login_password, host=login_querystring,
-            database=db, encryption=encryption, tds_version=tds_version)
-        cursor = conn.cursor()
-    except Exception as e:
-        if "Unknown database" in str(e):
-            errno, errstr = e.args
-            module.fail_json(msg="ERROR: %s %s" % (errno, errstr))
-        else:
-            module.fail_json(
-                msg="unable to connect, check login_user and login_password are correct, or alternatively check your "
-                    "@sysconfdir@/freetds.conf / ${HOME}/.freetds.conf")
+    conn, cursor = _connect_db(module, login_user, login_password, login_querystring, db, encryption, tds_version)
 
     # If transactional mode is requested, start a transaction
     conn.autocommit(not transaction)
@@ -338,53 +404,13 @@ def main():
         cursor = conn.cursor(as_dict=True)
         query_results_key = 'query_results_dict'
 
-    # Process the script into batches
-    queries = []
-    current_batch = []
-    for statement in script.splitlines(True):
-        # Ignore the Byte Order Mark, if found
-        if statement.strip() == '\uFEFF':
-            continue
-
-        # Assume each 'GO' is on its own line but may have leading/trailing whitespace
-        # and be of mixed-case
-        if statement.strip().upper() != 'GO':
-            current_batch.append(statement)
-        else:
-            queries.append(''.join(current_batch))
-            current_batch = []
-    if len(current_batch) > 0:
-        queries.append(''.join(current_batch))
+    queries = _parse_batches(script)
 
     result['changed'] = True
     if module.check_mode:
         module.exit_json(**result)
 
-    query_results = []
-    for query in queries:
-        # Catch and exit on any bad query errors
-        try:
-            cursor.execute(query, sql_params)
-            qry_result = []
-            rows = cursor.fetchall()
-            while rows:
-                qry_result.append(rows)
-                rows = cursor.fetchall()
-            query_results.append(qry_result)
-        except Exception as e:
-            # We know we executed the statement so this error just means we have no resultset
-            # which is ok (eg UPDATE/INSERT)
-            if (
-                    type(e).__name__ == 'OperationalError' and
-                    str(e) == 'Statement not executed or executed statement has no resultset'
-            ):
-                query_results.append([])
-            else:
-                # Rollback transaction before failing the module in case of error
-                if transaction:
-                    conn.rollback()
-                error_msg = '%s: %s' % (type(e).__name__, str(e))
-                module.fail_json(msg="query failed", query=query, error=error_msg, **result)
+    query_results = _execute_queries(module, cursor, conn, queries, sql_params, transaction, result)
 
     # Commit transaction before exiting the module in case of no error
     if transaction:

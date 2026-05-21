@@ -106,6 +106,29 @@ class OIDCAuthCodeBackend(OIDCBaseBackend):
             logger.debug(log_prompt.format('Authorization code or state value is missing'))
             return
 
+        token_payload, headers = self._build_token_request(request, code, code_verifier, log_prompt)
+        token_response_data = self._get_token_response_data(token_payload, headers, log_prompt)
+        if token_response_data is None:
+            return
+
+        id_token, access_token = self._validate_and_store_tokens(
+            request, token_response_data, nonce, log_prompt
+        )
+        if id_token is None:
+            return
+
+        claims = self._get_claims(access_token, id_token, log_prompt)
+        if claims is None:
+            return
+
+        logger.debug(log_prompt.format('Get or create user from claims'))
+        user, created = self.get_or_create_user_from_claims(request, claims)
+
+        logger.debug(log_prompt.format('Update or create oidc user'))
+
+        return self._handle_authenticated_user(request, user, log_prompt)
+
+    def _build_token_request(self, request, code, code_verifier, log_prompt):
         # Prepares the token payload that will be used to request an authentication token to the
         # token endpoint of the OIDC provider.
         logger.debug(log_prompt.format('Prepares token payload'))
@@ -138,18 +161,21 @@ class OIDCAuthCodeBackend(OIDCBaseBackend):
                 'client_id': settings.AUTH_OPENID_CLIENT_ID,
                 'client_secret': settings.AUTH_OPENID_CLIENT_SECRET,
             })
-            headers = None
-        else:
-            # Prepares the token headers that will be used to request an authentication token to the
-            # token endpoint of the OIDC provider.
-            logger.debug(log_prompt.format('Prepares token headers'))
-            basic_token = "{}:{}".format(
-                settings.AUTH_OPENID_CLIENT_ID, settings.AUTH_OPENID_CLIENT_SECRET
-            )
-            headers = {
-                "Authorization": "Basic {}".format(base64.b64encode(basic_token.encode()).decode())
-            }
+            return token_payload, None
+        return token_payload, self._get_token_headers(log_prompt)
 
+    def _get_token_headers(self, log_prompt):
+        # Prepares the token headers that will be used to request an authentication token to the
+        # token endpoint of the OIDC provider.
+        logger.debug(log_prompt.format('Prepares token headers'))
+        basic_token = "{}:{}".format(
+            settings.AUTH_OPENID_CLIENT_ID, settings.AUTH_OPENID_CLIENT_SECRET
+        )
+        return {
+            "Authorization": "Basic {}".format(base64.b64encode(basic_token.encode()).decode())
+        }
+
+    def _get_token_response_data(self, token_payload, headers, log_prompt):
         # Calls the token endpoint.
         logger.debug(log_prompt.format('Call the token endpoint'))
         token_response = requests.post(
@@ -157,13 +183,14 @@ class OIDCAuthCodeBackend(OIDCBaseBackend):
         )
         try:
             token_response.raise_for_status()
-            token_response_data = token_response.json()
+            return token_response.json()
         except Exception as e:
             error = "Json token response error, token response " \
                     "content is: {}, error is: {}".format(token_response.content, str(e))
             logger.debug(log_prompt.format(error))
-            return
+            return None
 
+    def _validate_and_store_tokens(self, request, token_response_data, nonce, log_prompt):
         # Validates the token.
         logger.debug(log_prompt.format('Validate ID Token'))
         raw_id_token = token_response_data.get('id_token')
@@ -172,7 +199,7 @@ class OIDCAuthCodeBackend(OIDCBaseBackend):
             logger.debug(log_prompt.format(
                 'ID Token is missing, raw id token is: {}'.format(raw_id_token))
             )
-            return
+            return None, None
 
         # Retrieves the access token and refresh token.
         access_token = token_response_data.get('access_token')
@@ -182,33 +209,34 @@ class OIDCAuthCodeBackend(OIDCBaseBackend):
         request.session['oidc_auth_id_token'] = raw_id_token
         request.session['oidc_auth_access_token'] = access_token
         request.session['oidc_auth_refresh_token'] = refresh_token
+        return id_token, access_token
 
+    def _get_claims(self, access_token, id_token, log_prompt):
         # If the id_token contains userinfo scopes and claims we don't have to hit the userinfo
         # endpoint.
         # https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims
         if settings.AUTH_OPENID_ID_TOKEN_INCLUDE_CLAIMS:
             logger.debug(log_prompt.format('ID Token in claims'))
-            claims = id_token
-        else:
-            # Fetches the claims (user information) from the userinfo endpoint provided by the OP.
-            logger.debug(log_prompt.format('Fetches the claims from the userinfo endpoint'))
-            claims_response = requests.get(
-                settings.AUTH_OPENID_PROVIDER_USERINFO_ENDPOINT,
-                headers={'Authorization': 'Bearer {0}'.format(access_token)}
-            )
-            try:
-                claims_response.raise_for_status()
-                claims = claims_response.json()
-            except Exception as e:
-                error = "Json claims response error, claims response " \
-                        "content is: {}, error is: {}".format(claims_response.content, str(e))
-                logger.debug(log_prompt.format(error))
-                return
+            return id_token
+        return self._get_claims_from_userinfo(access_token, log_prompt)
 
-        logger.debug(log_prompt.format('Get or create user from claims'))
-        user, created = self.get_or_create_user_from_claims(request, claims)
+    def _get_claims_from_userinfo(self, access_token, log_prompt):
+        # Fetches the claims (user information) from the userinfo endpoint provided by the OP.
+        logger.debug(log_prompt.format('Fetches the claims from the userinfo endpoint'))
+        claims_response = requests.get(
+            settings.AUTH_OPENID_PROVIDER_USERINFO_ENDPOINT,
+            headers={'Authorization': 'Bearer {0}'.format(access_token)}
+        )
+        try:
+            claims_response.raise_for_status()
+            return claims_response.json()
+        except Exception as e:
+            error = "Json claims response error, claims response " \
+                    "content is: {}, error is: {}".format(claims_response.content, str(e))
+            logger.debug(log_prompt.format(error))
+            return None
 
-        logger.debug(log_prompt.format('Update or create oidc user'))
+    def _handle_authenticated_user(self, request, user, log_prompt):
 
         if self.user_can_authenticate(user):
             logger.debug(log_prompt.format('OpenID user login success'))

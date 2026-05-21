@@ -34,6 +34,52 @@ class Counter:
         return self.counter == other.counter
 
 
+def _get_migrations_dir(base_dir, subdir):
+    return os.path.join(base_dir, subdir, 'migrations')
+
+
+def _get_conflicts_in_migrations_dir(migrations_dir, subdir):
+    files = os.listdir(migrations_dir)
+    conflict_files = []
+    prefix_file_map = dict()
+
+    for file in files:
+        file = str(file)
+        if not file.endswith('.py'):
+            continue
+        if 'squashed' in file:
+            continue
+        file_prefix = file.split('_')[0]
+        if file_prefix in prefix_file_map.keys():
+            conflict_files.append((subdir, file, prefix_file_map.get(file_prefix)))
+        else:
+            prefix_file_map[file_prefix] = file
+    return conflict_files
+
+
+def _get_conflict_files(base_dir, sub_dirs):
+    conflict_files = []
+    for subdir in sub_dirs:
+        migrations_dir = _get_migrations_dir(base_dir, subdir)
+        if not os.path.exists(migrations_dir):
+            continue
+        conflict_files.extend(_get_conflicts_in_migrations_dir(migrations_dir, subdir))
+    return conflict_files
+
+
+def _print_conflict_files(conflict_files):
+    print('=' * 80)
+    for conflict_file in conflict_files:
+        msg_dir = '{:<15}'.format(conflict_file[0])
+        msg_split = '=> '
+        msg_left = msg_dir
+        msg_right1 = msg_split + '{:<80}'.format(conflict_file[1])
+        msg_right2 = ' ' * len(msg_left) + msg_split + conflict_file[2]
+        print(f'{msg_left}{msg_right1}\n{msg_right2}\n')
+
+    print('=' * 80)
+
+
 def digest_sql_query():
     queries = connection.queries
     counters = defaultdict(Counter)
@@ -142,49 +188,14 @@ def check_migrations_file_prefix_conflict(*args, **kwargs):
     _dir = BASE_DIR
     # 获取所有子目录
     sub_dirs = next(os.walk(_dir))[1]
-    # 记录冲突的文件，元素为 (subdir, file1, file2)
-    conflict_files = []
-
-    # 遍历每个子目录
-    for subdir in sub_dirs:
-        # 拼接 migrations 目录路径
-        migrations_dir = os.path.join(_dir, subdir, 'migrations')
-        # 判断是否存在 migrations 目录
-        if not os.path.exists(migrations_dir):
-            continue
-        # 获取所有文件名
-        files = os.listdir(migrations_dir)
-        # 遍历每个文件名
-        prefix_file_map = dict()
-        for file in files:
-            file = str(file)
-            # 判断是否为 Python 文件
-            if not file.endswith('.py'):
-                continue
-            if 'squashed' in file:
-                continue
-            # file 为文件名
-            file_prefix = file.split('_')[0]
-            if file_prefix in prefix_file_map.keys():
-                conflict_files.append((subdir, file, prefix_file_map.get(file_prefix)))
-            else:
-                prefix_file_map[file_prefix] = file
+    conflict_files = _get_conflict_files(_dir, sub_dirs)
 
     conflict_count = len(conflict_files)
     print(f'Conflict count:({conflict_count})')
     if not conflict_count:
         return
 
-    print('=' * 80)
-    for conflict_file in conflict_files:
-        msg_dir = '{:<15}'.format(conflict_file[0])
-        msg_split = '=> '
-        msg_left = msg_dir
-        msg_right1 = msg_split + '{:<80}'.format(conflict_file[1])
-        msg_right2 = ' ' * len(msg_left) + msg_split + conflict_file[2]
-        print(f'{msg_left}{msg_right1}\n{msg_right2}\n')
-
-    print('=' * 80)
+    _print_conflict_files(conflict_files)
 
 
 @receiver(django_ready)

@@ -107,39 +107,47 @@ class OracleInfo(object):
         }
 
     def get_info(self, filter_, exclude_fields):
-        include_list = []
-        exclude_list = []
-
-        if filter_:
-            partial_info = {}
-
-            for fi in filter_:
-                if fi.lstrip('!') not in self.info:
-                    self.module.warn('filter element: %s is not allowable, ignored' % fi)
-                    continue
-
-                if fi[0] == '!':
-                    exclude_list.append(fi.lstrip('!'))
-                else:
-                    include_list.append(fi)
-
-            if include_list:
-                self.__collect(exclude_fields, set(include_list))
-
-                for i in self.info:
-                    if i in include_list:
-                        partial_info[i] = self.info[i]
-            else:
-                not_in_exclude_list = list(set(self.info) - set(exclude_list))
-                self.__collect(exclude_fields, set(not_in_exclude_list))
-
-                for i in self.info:
-                    if i not in exclude_list:
-                        partial_info[i] = self.info[i]
-            return partial_info
-        else:
+        if not filter_:
             self.__collect(exclude_fields, set(self.info))
             return self.info
+
+        include_list, exclude_list = self._classify_filter(filter_)
+
+        if include_list:
+            return self._build_partial_info_include(exclude_fields, include_list)
+        return self._build_partial_info_exclude(exclude_fields, exclude_list)
+
+
+    def _classify_filter(self, filter_):
+        """Parse the raw filter list into (include_list, exclude_list)."""
+        include_list = []
+        exclude_list = []
+        for fi in filter_:
+            if fi.lstrip('!') not in self.info:
+                self.module.warn('filter element: %s is not allowable, ignored' % fi)
+                continue
+            if fi[0] == '!':
+                exclude_list.append(fi.lstrip('!'))
+            else:
+                include_list.append(fi)
+        return include_list, exclude_list
+
+    def _build_partial_info_include(self, exclude_fields, include_list):
+        self.__collect(exclude_fields, set(include_list))
+        partial_info = {}
+        for i in self.info:
+            if i in include_list:
+                partial_info[i] = self.info[i]
+        return partial_info
+
+    def _build_partial_info_exclude(self, exclude_fields, exclude_list):
+        not_in_exclude_list = list(set(self.info) - set(exclude_list))
+        self.__collect(exclude_fields, set(not_in_exclude_list))
+        partial_info = {}
+        for i in self.info:
+            if i not in exclude_list:
+                partial_info[i] = self.info[i]
+        return partial_info
 
     def __collect(self, exclude_fields, wanted):
         """Collect all possible subsets."""
