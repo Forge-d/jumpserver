@@ -36,7 +36,7 @@ services:
       LOG_LEVEL: DEBUG
     ports:
       - "2222:2222"
-      - "5000:5000"
+      - "5050:5000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -75,7 +75,9 @@ services:
     ports:
       - "80:80"
     volumes:
-      - jms_data:/opt/jumpserver/data
+      # Bind-mount the host's data dir so jms_web's nginx and the on-host
+      # gunicorn (writing replays to ./data/media) see the same files.
+      - ./data:/opt/jumpserver/data
       - ./web-override.conf:/etc/nginx/conf.d/default.conf:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
