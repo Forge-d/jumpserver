@@ -18,9 +18,6 @@ def get_login_title():
 
 
 def generate_ips(address_string):
-    def transform(_ip):
-        real_ip, err_msg = lookup_domain(_ip)
-        return _ip if err_msg or real_ip == '0.0.0.0' else real_ip
 
     # 支持的格式
     # 192.168.1.1,192.168.1.2
@@ -30,13 +27,24 @@ def generate_ips(address_string):
     if len(ip_list) >= 1:
         for ip in ip_list:
             try:
-                ips.append(str(IP(transform(ip))))
+                ips.append(str(IP(_transform_ip(ip))))
             except ValueError:
                 pass
         if ips:
             return ips
 
     ip_list = address_string.split('-')
+    ips = _expand_ip_range(ip_list)
+    return ips
+
+
+def _transform_ip(ip):
+    real_ip, err_msg = lookup_domain(ip)
+    return ip if err_msg or real_ip == '0.0.0.0' else real_ip
+
+
+def _expand_ip_range(ip_list):
+    ips = []
     try:
         if len(ip_list) == 2:
             start_ip, end_ip = ip_list

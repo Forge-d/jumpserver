@@ -129,6 +129,21 @@ class PlaybookFileBrowserAPIView(APIView):
             nodes = self.generate_tree(playbook, work_path, expand_key)
             return Response(nodes)
 
+    @staticmethod
+    def _find_new_name(full_path, name, is_file=False):
+        p = name
+        if not p:
+            if is_file:
+                p = 'new_file.yml'
+            else:
+                p = 'new_dir'
+        np = safe_join(full_path, p)
+        n = 0
+        while os.path.exists(np):
+            n += 1
+            np = safe_join(full_path, '{}({})'.format(p, n))
+        return np
+
     def post(self, request, **kwargs):
         playbook_id = kwargs.get('pk')
         playbook = self.get_playbook(playbook_id)
@@ -146,25 +161,12 @@ class PlaybookFileBrowserAPIView(APIView):
         content = request.data.get('content', '')
         name = request.data.get('name', '')
 
-        def find_new_name(p, is_file=False):
-            if not p:
-                if is_file:
-                    p = 'new_file.yml'
-                else:
-                    p = 'new_dir'
-            np = safe_join(full_path, p)
-            n = 0
-            while os.path.exists(np):
-                n += 1
-                np = safe_join(full_path, '{}({})'.format(p, n))
-            return np
-
         try:
             if is_directory:
-                new_file_path = find_new_name(name)
+                new_file_path = self._find_new_name(full_path, name)
                 os.makedirs(new_file_path)
             else:
-                new_file_path = find_new_name(name, True)
+                new_file_path = self._find_new_name(full_path, name, True)
                 with open(new_file_path, 'w') as f:
                     f.write(content)
         except SuspiciousFileOperation:

@@ -76,13 +76,9 @@ class CommandStore(CommandBase):
         if not date_to and not session:
             date_to = date_to_default
         if date_from is not None:
-            if isinstance(date_from, datetime.datetime):
-                date_from = date_from.timestamp()
-            filter_kwargs['timestamp__gte'] = int(date_from)
+            filter_kwargs['timestamp__gte'] = int(CommandStore._to_timestamp(date_from))
         if date_to is not None:
-            if isinstance(date_to, datetime.datetime):
-                date_to = date_to.timestamp()
-            filter_kwargs['timestamp__lte'] = int(date_to)
+            filter_kwargs['timestamp__lte'] = int(CommandStore._to_timestamp(date_to))
 
         if user:
             filter_kwargs["user__startswith"] = user
@@ -99,6 +95,12 @@ class CommandStore(CommandBase):
         if risk_level is not None:
             filter_kwargs['risk_level'] = risk_level
         return filter_kwargs
+
+    @staticmethod
+    def _to_timestamp(dt):
+        if isinstance(dt, datetime.datetime):
+            return dt.timestamp()
+        return dt
 
     def filter(self, date_from=None, date_to=None,
                user=None, asset=None, account=None,

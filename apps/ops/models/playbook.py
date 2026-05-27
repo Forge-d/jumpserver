@@ -42,16 +42,18 @@ class Playbook(JMSBaseModel):
         for root, dirs, files in os.walk(self.work_dir):
             for f in files:
                 try:
-                    if str(f).endswith('.yml') or str(f).endswith('.yaml'):
-                        lines = self.search_keywords(os.path.join(root, f))
-                        if len(lines) > 0:
-                            for line in lines:
-                                result.append({'file': f, 'line': line[0], 'keyword': line[1]})
+                    result.extend(self._collect_file_keyword_hits(root, f))
                 # 遇到无法读取的文件，跳过
                 except UnicodeEncodeError:
                     continue
 
         return result
+
+    def _collect_file_keyword_hits(self, root, f):
+        if not (str(f).endswith('.yml') or str(f).endswith('.yaml')):
+            return []
+        lines = self.search_keywords(os.path.join(root, f))
+        return [{'file': f, 'line': line[0], 'keyword': line[1]} for line in lines]
 
     @staticmethod
     def search_keywords(file):

@@ -34,41 +34,15 @@ def create_or_update_celery_periodic_tasks(tasks):
     """
     # Todo: check task valid, task and callback must be a celery task
     for name, detail in tasks.items():
-        interval = None
-        crontab = None
-        last_run_at = None
-
         try:
             IntervalSchedule.objects.all().count()
         except (ProgrammingError, OperationalError):
             return None
 
-        if isinstance(detail.get("interval"), int):
-            kwargs = dict(
-                every=detail['interval'],
-                period=IntervalSchedule.SECONDS,
-            )
-            # 不能使用 get_or_create，因为可能会有多个
-            interval = IntervalSchedule.objects.filter(**kwargs).first()
-            if interval is None:
-                interval = IntervalSchedule.objects.create(**kwargs)
-            last_run_at = local_now()
-        elif isinstance(detail.get("crontab"), str):
-            try:
-                minute, hour, day, month, week = detail["crontab"].split()
-            except ValueError:
-                logger.error("crontab is not valid")
-                return
-            kwargs = dict(
-                minute=minute, hour=hour, day_of_week=week,
-                day_of_month=day, month_of_year=month, timezone=get_current_timezone()
-            )
-            crontab = CrontabSchedule.objects.filter(**kwargs).first()
-            if crontab is None:
-                crontab = CrontabSchedule.objects.create(**kwargs)
-        else:
-            logger.warning("Schedule is not valid: %s" % name)
+        schedule = _resolve_schedule(name, detail)
+        if schedule is None:
             return
+        interval, crontab, last_run_at = schedule
 
         defaults = dict(
             interval=interval,
@@ -88,6 +62,41 @@ def create_or_update_celery_periodic_tasks(tasks):
         )
         PeriodicTasks.update_changed()
         return task
+    
+
+def _resolve_schedule(name, detail):
+    interval = None
+    crontab = None
+    last_run_at = None
+
+    if isinstance(detail.get("interval"), int):
+        kwargs = dict(
+            every=detail['interval'],
+            period=IntervalSchedule.SECONDS,
+        )
+        # 不能使用 get_or_create，因为可能会有多个
+        interval = IntervalSchedule.objects.filter(**kwargs).first()
+        if interval is None:
+            interval = IntervalSchedule.objects.create(**kwargs)
+        last_run_at = local_now()
+    elif isinstance(detail.get("crontab"), str):
+        try:
+            minute, hour, day, month, week = detail["crontab"].split()
+        except ValueError:
+            logger.error("crontab is not valid")
+            return None
+        kwargs = dict(
+            minute=minute, hour=hour, day_of_week=week,
+            day_of_month=day, month_of_year=month, timezone=get_current_timezone()
+        )
+        crontab = CrontabSchedule.objects.filter(**kwargs).first()
+        if crontab is None:
+            crontab = CrontabSchedule.objects.create(**kwargs)
+    else:
+        logger.warning("Schedule is not valid: %s" % name)
+        return None
+
+    return interval, crontab, last_run_at
 
 
 def disable_celery_periodic_task(task_name):

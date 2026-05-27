@@ -78,19 +78,10 @@ class NativeClient(TextChoices):
     def get_methods(cls, os='windows'):
         clients_map = cls.get_native_clients()
         methods = defaultdict(list)
-        xpack_protocols = Protocol.xpack_protocols()
 
         for protocol, _clients in clients_map.items():
-            if not settings.XPACK_LICENSE_IS_VALID and protocol in xpack_protocols:
-                continue
-            if isinstance(_clients, dict):
-                if os == 'all':
-                    _clients = list(itertools.chain(*_clients.values()))
-                else:
-                    _clients = _clients.get(os, _clients['default'])
+            _clients = cls._resolve_clients(_clients, os)
             for client in _clients:
-                if not settings.XPACK_LICENSE_IS_VALID and client in cls.xpack_methods():
-                    continue
                 methods[protocol].append({
                     'value': client.value,
                     'label': client.label,
@@ -98,6 +89,14 @@ class NativeClient(TextChoices):
                 })
         return methods
 
+    @staticmethod
+    def _resolve_clients(clients, os):
+        if isinstance(clients, dict):
+            if os == 'all':
+                return list(itertools.chain(*clients.values()))
+            else:
+                return clients.get(os, clients['default'])
+        return clients
 
 class AppletMethod:
     @classmethod
@@ -264,7 +263,7 @@ class ConnectMethodUtil:
             'magnus': 'TERMINAL_MAGNUS_ENABLED',
         }
         disabled_component = [comp for comp, attr in component_setting.items() if
-                              not (getattr(settings, attr) and settings.XPACK_LICENSE_IS_VALID)]
+                              not getattr(settings, attr)]
         if not disabled_component:
             return methods
 
@@ -295,46 +294,11 @@ class ConnectMethodUtil:
 
         for component, component_protocol in cls.components().items():
             support = component_protocol['support']
-            default_web_methods = component_protocol.get('web_methods', [])
-            client_limits = component_protocol.get('client_limits', {})
-
             for asset_protocol in support:
-                # Web 方式
-                web_methods = spec_web_methods.get(asset_protocol, [])
-                if not web_methods:
-                    web_methods = default_web_methods
-                methods[str(asset_protocol)].extend([
-                    {
-                        'component': component.value,
-                        'type': 'web',
-                        'endpoint_protocol': 'http',
-                        'value': method.value,
-                        'label': method.label,
-                    }
-                    for method in web_methods
-                ])
-
-                # 客户端方式
-                if component_protocol['match'] == 'map':
-                    listen = [asset_protocol]
-                else:
-                    listen = component_protocol['listen']
-
-                for listen_protocol in listen:
-                    limits = client_limits.get(listen_protocol, [])
-                    if limits and asset_protocol not in limits:
-                        continue
-                    # Native method
-                    client_methods = native_methods.get(listen_protocol, [])
-                    methods[str(asset_protocol)].extend([
-                        {
-                            'component': component.value,
-                            'type': 'native',
-                            'endpoint_protocol': listen_protocol,
-                            **method
-                        }
-                        for method in client_methods
-                    ])
+                cls._add_asset_protocol_methods(
+                    methods, component, component_protocol,
+                    asset_protocol, native_methods, spec_web_methods
+                )
 
         # 远程应用方式，这个只有 tinker 提供，并且协议可能是自定义的
         for asset_protocol, applet_methods in applet_methods.items():
@@ -352,3 +316,45 @@ class ConnectMethodUtil:
 
         cls._all_methods[os] = methods
         return methods
+
+    @classmethod
+    def _add_asset_protocol_methods(cls, methods, component, component_protocol, asset_protocol, native_methods, spec_web_methods):
+        default_web_methods = component_protocol.get('web_methods', [])
+        client_limits = component_protocol.get('client_limits', {})
+
+        # Web 方式
+        web_methods = spec_web_methods.get(asset_protocol, [])
+        if not web_methods:
+            web_methods = default_web_methods
+        methods[str(asset_protocol)].extend([
+            {
+                'component': component.value,
+                'type': 'web',
+                'endpoint_protocol': 'http',
+                'value': method.value,
+                'label': method.label,
+            }
+            for method in web_methods
+        ])
+
+        # 客户端方式
+        if component_protocol['match'] == 'map':
+            listen = [asset_protocol]
+        else:
+            listen = component_protocol['listen']
+
+        for listen_protocol in listen:
+            limits = client_limits.get(listen_protocol, [])
+            if limits and asset_protocol not in limits:
+                continue
+            # Native method
+            client_methods = native_methods.get(listen_protocol, [])
+            methods[str(asset_protocol)].extend([
+                {
+                    'component': component.value,
+                    'type': 'native',
+                    'endpoint_protocol': listen_protocol,
+                    **method
+                }
+                for method in client_methods
+            ])

@@ -91,10 +91,17 @@ def check_asset_permission_will_expired():
             else:
                 user_asset_remain_day_mapper[remain_days][u] = set(assets)
 
+    _send_user_expiry_notifications(user_asset_remain_day_mapper)
+    _send_org_admin_expiry_notifications(org_perm_remain_day_mapper)
+
+
+def _send_user_expiry_notifications(user_asset_remain_day_mapper):
     for day_count, user_asset_mapper in user_asset_remain_day_mapper.items():
         for user, assets in user_asset_mapper.items():
             PermedAssetsWillExpireUserMsg(user, assets, day_count).publish_async()
 
+
+def _send_org_admin_expiry_notifications(org_perm_remain_day_mapper):
     for day_count, org_perm_mapper in org_perm_remain_day_mapper.items():
         for org, perms in org_perm_mapper.items():
             org_admins = org.admins.all()

@@ -431,18 +431,22 @@ class Ticket(StatusMixin, JMSBaseModel):
             elif isinstance(self.rel_snapshot[name], list):
                 value = ','.join(self.rel_snapshot[name])
         elif name == 'apply_accounts':
-            new_values = []
-            for account in value:
-                alias = dict(AliasAccount.choices).get(account)
-                new_value = alias if alias else account
-                new_values.append(str(new_value))
-            value = ', '.join(new_values)
+            value = self._resolve_apply_accounts_value(value)
         elif name == 'org_id':
             org = Organization.get_instance(value)
             value = org.name if org else ''
         elif isinstance(value, list):
             value = ', '.join(value)
         return value
+
+    @staticmethod
+    def _resolve_apply_accounts_value(value):
+        new_values = []
+        for account in value:
+            alias = dict(AliasAccount.choices).get(account)
+            new_value = alias if alias else account
+            new_values.append(str(new_value))
+        return ', '.join(new_values)
 
     def get_local_snapshot(self):
         snapshot = {}

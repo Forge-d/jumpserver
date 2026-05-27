@@ -191,20 +191,28 @@ class LDAPServerUtil(object):
                 continue
             value = getattr(entry, mapping).value or ''
             if attr == 'is_active':
-                if mapping.lower() == 'useraccountcontrol' and value:
-                    value = int(value) & LDAP_AD_ACCOUNT_DISABLE != LDAP_AD_ACCOUNT_DISABLE
-                else:
-                    value = is_true(value)
-
+                value = self._resolve_is_active_value(mapping, value)
             if attr == 'groups' and mapping.lower() == 'memberof':
-                # AD: {'groups': 'memberOf'}
-                if isinstance(value, str) and value:
-                    value = [value]
-                if not isinstance(value, list):
-                    value = []
+                value = self._resolve_groups_value(value)
             user[attr] = value.strip() if isinstance(value, str) else value
             user['status'] = ImportStatus.pending
         return user
+
+    @staticmethod
+    def _resolve_is_active_value(mapping, value):
+        if mapping.lower() == 'useraccountcontrol' and value:
+            return int(value) & LDAP_AD_ACCOUNT_DISABLE != LDAP_AD_ACCOUNT_DISABLE
+        else:
+            return is_true(value)
+
+    @staticmethod
+    def _resolve_groups_value(value):
+        # AD: {'groups': 'memberOf'}
+        if isinstance(value, str) and value:
+            value = [value]
+        if not isinstance(value, list):
+            value = []
+        return value
 
     def user_entries_to_dict(self, user_entries):
         users = []

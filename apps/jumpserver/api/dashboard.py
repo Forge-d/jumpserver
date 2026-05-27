@@ -348,7 +348,6 @@ class IndexApi(DateTimeMixin, DatesLoginMetricMixin, APIView):
     }
 
     def get(self, request, *args, **kwargs):
-        data = {}
 
         query_params = self.request.query_params
 
@@ -356,110 +355,45 @@ class IndexApi(DateTimeMixin, DatesLoginMetricMixin, APIView):
 
         _all = query_params.get('all')
 
-        if _all or query_params.get('total_count') or query_params.get('total_count_users'):
-            data.update({
-                'total_count_users': caches.users_amount,
-            })
+        data = {}
+        data.update(self._collect_total_counts(_all, query_params, caches))
+        data.update(self._collect_dates_data(_all, query_params))
+        return JsonResponse(data, status=200)
 
-        if _all or query_params.get('total_count') or query_params.get('total_count_assets'):
-            data.update({
-                'total_count_assets': caches.assets_amount,
-            })
 
-        if _all or query_params.get('total_count') or query_params.get('total_count_users_this_week'):
-            data.update({
-                'total_count_users_this_week': caches.new_users_amount_this_week,
-            })
+    def _collect_total_counts(self, _all, query_params, caches):
+        want = _all or query_params.get('total_count')
+        items = [
+            ('total_count_users', lambda: caches.users_amount),
+            ('total_count_assets', lambda: caches.assets_amount),
+            ('total_count_users_this_week', lambda: caches.new_users_amount_this_week),
+            ('total_count_assets_this_week', lambda: caches.new_assets_amount_this_week),
+            ('total_count_login_users', lambda: self.user_login_amount),
+            ('total_count_today_active_assets', lambda: caches.total_count_today_active_assets),
+            ('total_count_online_users', lambda: caches.total_count_online_users),
+            ('total_count_online_sessions', lambda: caches.total_count_online_sessions),
+            ('total_count_today_failed_sessions', lambda: caches.total_count_today_failed_sessions),
+            ('total_count_user_login_logs', lambda: self.user_login_logs_amount),
+            ('total_count_user_login_success_logs', lambda: self.user_login_success_logs_amount),
+            ('total_count_operate_logs', lambda: self.operate_logs_amount),
+            ('total_count_change_password_logs', lambda: self.change_password_logs_amount),
+            ('total_count_commands', lambda: self.commands_amount),
+            ('total_count_commands_danger', lambda: self.commands_danger_amount),
+            ('total_count_history_sessions', lambda: self.sessions_amount - self.online_sessions_amount),
+            ('total_count_ftp_logs', lambda: self.ftp_logs_amount),
+            ('total_count_job_logs', lambda: self.job_logs_amount),
+            ('total_count_job_logs_running', lambda: self.job_logs_running_amount),
+            ('total_count_job_logs_failed', lambda: self.job_logs_failed_amount),
+            ('total_count_type_to_assets_amount', lambda: self.get_type_to_assets),
+        ]
+        data = {}
+        for key, getter in items:
+            if want or query_params.get(key):
+                data[key] = getter()
+        return data
 
-        if _all or query_params.get('total_count') or query_params.get('total_count_assets_this_week'):
-            data.update({
-                'total_count_assets_this_week': caches.new_assets_amount_this_week,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_login_users'):
-            data.update({
-                'total_count_login_users': self.user_login_amount
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_today_active_assets'):
-            data.update({
-                'total_count_today_active_assets': caches.total_count_today_active_assets,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_online_users'):
-            data.update({
-                'total_count_online_users': caches.total_count_online_users,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_online_sessions'):
-            data.update({
-                'total_count_online_sessions': caches.total_count_online_sessions,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_today_failed_sessions'):
-            data.update({
-                'total_count_today_failed_sessions': caches.total_count_today_failed_sessions,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_user_login_logs'):
-            data.update({
-                'total_count_user_login_logs': self.user_login_logs_amount,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_user_login_success_logs'):
-            data.update({
-                'total_count_user_login_success_logs': self.user_login_success_logs_amount,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_operate_logs'):
-            data.update({
-                'total_count_operate_logs': self.operate_logs_amount,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_change_password_logs'):
-            data.update({
-                'total_count_change_password_logs': self.change_password_logs_amount,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_commands'):
-            data.update({
-                'total_count_commands': self.commands_amount,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_commands_danger'):
-            data.update({
-                'total_count_commands_danger': self.commands_danger_amount,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_history_sessions'):
-            data.update({
-                'total_count_history_sessions': self.sessions_amount - self.online_sessions_amount,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_ftp_logs'):
-            data.update({
-                'total_count_ftp_logs': self.ftp_logs_amount,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_job_logs'):
-            data.update({
-                'total_count_job_logs': self.job_logs_amount,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_job_logs_running'):
-            data.update({
-                'total_count_job_logs_running': self.job_logs_running_amount,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_job_logs_failed'):
-            data.update({
-                'total_count_job_logs_failed': self.job_logs_failed_amount,
-            })
-
-        if _all or query_params.get('total_count') or query_params.get('total_count_type_to_assets_amount'):
-            data.update({
-                'total_count_type_to_assets_amount': self.get_type_to_assets,
-            })
+    def _collect_dates_data(self, _all, query_params):
+        data = {}
 
         if _all or query_params.get('session_dates_metrics'):
             data.update({
@@ -491,5 +425,5 @@ class IndexApi(DateTimeMixin, DatesLoginMetricMixin, APIView):
             data.update({
                 'dates_login_record_top10_sessions': self.get_dates_login_record_sessions()
             })
+        return data
 
-        return JsonResponse(data, status=200)

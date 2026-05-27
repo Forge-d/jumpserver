@@ -38,38 +38,43 @@ def clean_group(interactive=True):
         need_clean_count = groups_duplicate.count()
 
         for group in groups_duplicate:
-            need_clean = True
-            if group.users__count > 0:
-                need_clean = False
-            elif group.asset_permissions__count > 0:
-                need_clean = False
-            elif need_clean_count == 1:
-                need_clean = False
+            need_clean = _check_need_clean(group, need_clean_count)
 
             if need_clean:
-                confirm = True
-                if interactive:
-                    confirm = False
-                    while True:
-                        confirm = input(
-                            "Delete user group <{}>, create at {}? ([y]/n)".format(
-                                name, group.date_created)
-                        )
-                        if confirm.lower() in ["y", ""]:
-                            confirm = True
-                            break
-                        elif confirm.lower() == "n":
-                            confirm = False
-                            break
-                        else:
-                            print("No valid input")
-                            continue
+                confirm = _get_confirm(name, group, interactive)
                 if confirm:
                     group.delete()
                     print("Delete success: {}".format(name))
                     need_clean_count -= 1
                 else:
                     continue
+
+
+def _check_need_clean(group, need_clean_count):
+    if group.users__count > 0:
+        return False
+    if group.asset_permissions__count > 0:
+        return False
+    if need_clean_count == 1:
+        return False
+    return True
+
+
+def _get_confirm(name, group, interactive):
+    if not interactive:
+        return True
+    while True:
+        confirm = input(
+            "Delete user group <{}>, create at {}? ([y]/n)".format(
+                name, group.date_created)
+        )
+        if confirm.lower() in ["y", ""]:
+            return True
+        elif confirm.lower() == "n":
+            return False
+        else:
+            print("No valid input")
+            continue
 
 if __name__ == '__main__':
     clean_group()

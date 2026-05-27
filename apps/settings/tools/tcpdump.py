@@ -38,18 +38,7 @@ async def once_tcpdump(
         # 获取TCP标志位、序号、确认号、部分数据等信息
         seq, ack, flags = tcp_hdr[2], tcp_hdr[3], tcp_hdr[5]
         data = packet[54:]
-        # 如果过滤的参数[源地址、源端口等]为空，则不过滤
-        # 各个过滤参数之间为 `且` 的关系
-        green_light = True
-        if src_ips and src_ip not in src_ips:
-            green_light = False
-        if src_ports and src_port not in src_ports:
-            green_light = False
-        if dest_ips and dest_ip not in dest_ips:
-            green_light = False
-        if dest_ports and dest_port not in dest_ports:
-            green_light = False
-        if not green_light:
+        if not _passes_filter(src_ip, src_port, dest_ip, dest_port, src_ips, src_ports, dest_ips, dest_ports):
             continue
 
         results = [
@@ -60,6 +49,19 @@ async def once_tcpdump(
         for r in results:
             await display(r)
 
+def _passes_filter(src_ip, src_port, dest_ip, dest_port, src_ips, src_ports, dest_ips, dest_ports):
+    # 如果过滤的参数[源地址、源端口等]为空，则不过滤
+    # 各个过滤参数之间为 `且` 的关系
+    green_light = True
+    if src_ips and src_ip not in src_ips:
+        green_light = False
+    if src_ports and src_port not in src_ports:
+        green_light = False
+    if dest_ips and dest_ip not in dest_ips:
+        green_light = False
+    if dest_ports and dest_port not in dest_ports:
+        green_light = False
+    return green_light
 
 def list_show(items, default='all'):
     return ','.join(map(str, items)) or default

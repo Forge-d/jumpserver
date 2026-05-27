@@ -115,19 +115,17 @@ class JMSInventory:
     def make_protocol_setting_vars(host, protocols):
         # 针对 ssh sqlserver 协议的特殊处理
         for p in protocols:
-            if p.name == 'ssh':
-                if hasattr(p, 'setting'):
-                    setting = getattr(p, 'setting')
-                    host['jms_asset']['old_ssh_version'] = setting.get('old_ssh_version', False)
-            if p.name == 'sqlserver':
-                if hasattr(p, 'setting'):
-                    setting = getattr(p, 'setting')
-                    encryption = setting.get('encrypt', True)
-                    version = setting.get('version', ">=2014")
-                    if version == '<2014':
-                        host['jms_asset']['tds_version'] = '7.0'
-                    if not encryption:
-                        host['jms_asset']['encryption'] = 'off'
+            if p.name == 'ssh' and hasattr(p, 'setting'):
+                setting = getattr(p, 'setting')
+                host['jms_asset']['old_ssh_version'] = setting.get('old_ssh_version', False)
+            if p.name == 'sqlserver' and hasattr(p, 'setting'):
+                setting = getattr(p, 'setting')
+                encryption = setting.get('encrypt', True)
+                version = setting.get('version', ">=2014")
+                if version == '<2014':
+                    host['jms_asset']['tds_version'] = '7.0'
+                if not encryption:
+                    host['jms_asset']['encryption'] = 'off'
 
     def make_account_vars(self, host, asset, account, automation, protocol, platform, gateway, path_dir,
                           ansible_config):
@@ -361,24 +359,7 @@ class JMSInventory:
                 p['name']: p['setting'] for p in platform.protocols.values('name', 'setting')
             }
             for asset in assets:
-                protocols = self.set_platform_protocol_setting_to_asset(asset, platform_protocols)
-                account = self.select_account(asset)
-                host = self.asset_to_host(asset, account, automation, protocols, platform, path_dir)
-
-                if not automation.ansible_enabled:
-                    host['error'] = _('Ansible disabled')
-
-                if self.host_callback is not None:
-                    host = self.host_callback(
-                        host, asset=asset, account=account,
-                        platform=platform, automation=automation,
-                        path_dir=path_dir
-                    )
-
-                if isinstance(host, list):
-                    hosts.extend(host)
-                else:
-                    hosts.append(host)
+                hosts.extend(self._collect_asset_hosts(asset, automation, platform_protocols, platform, path_dir))
 
         exclude_hosts = list(filter(lambda x: x.get('error'), hosts))
         if exclude_hosts:
@@ -399,6 +380,26 @@ class JMSInventory:
                 }
             })
         return data
+
+    def _collect_asset_hosts(self, asset, automation, platform_protocols, platform, path_dir):
+        protocols = self.set_platform_protocol_setting_to_asset(asset, platform_protocols)
+        account = self.select_account(asset)
+        host = self.asset_to_host(asset, account, automation, protocols, platform, path_dir)
+
+        if not automation.ansible_enabled:
+            host['error'] = _('Ansible disabled')
+
+        if self.host_callback is not None:
+            host = self.host_callback(
+                host, asset=asset, account=account,
+                platform=platform, automation=automation,
+                path_dir=path_dir
+            )
+
+        if isinstance(host, list):
+            return host
+        return [host]
+
 
     def write_to_file(self, path):
         path_dir = os.path.dirname(path)
