@@ -3,7 +3,7 @@ Bootstrap IAM configuration from config.yml on startup.
 Idempotent — safe to run multiple times.
 
 Required config.yml settings:
-    PLATFORM_KEYCLOAK_SERVER_URL  - e.g. https://iam.the-grydd.com
+    PLATFORM_IAM_SERVER_URL  - e.g. https://iam.the-grydd.com
     PLATFORM_MASTER_TENANT         - IAM tenant id
     PLATFORM_MASTER_CLIENT_ID     - IAM client ID
     PLATFORM_MASTER_CLIENT_SECRET - Client secret (blank for public clients)
@@ -42,7 +42,7 @@ class Command(BaseCommand):
     def _bootstrap(self):
         from grydd_platform.models import IAMConfig
 
-        server_url = CONFIG.get('PLATFORM_KEYCLOAK_SERVER_URL', '')
+        server_url = CONFIG.get('PLATFORM_IAM_SERVER_URL', '')
         tenant = CONFIG.get('PLATFORM_MASTER_TENANT', '')
         client_id = CONFIG.get('PLATFORM_MASTER_CLIENT_ID', '')
         client_secret = CONFIG.get('PLATFORM_MASTER_CLIENT_SECRET', '')
