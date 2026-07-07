@@ -195,7 +195,14 @@ else:
 CELERY_TIMEZONE = CONFIG.TIME_ZONE
 CELERY_ENABLE_UTC = False
 CELERY_TASK_SERIALIZER = 'pickle'
-CELERY_RESULT_SERIALIZER = 'pickle'
+# chunk-12.3-followup-runner-phase-2: switched to JSON so the Go core
+# can read AsyncResult payloads directly from Redis (Python pickle is
+# insecure against untrusted payloads — arbitrary code execution on
+# deserialization, per Celery's security docs). The task serializer
+# stays pickle for now; flipping it would force every queued task's
+# args to be JSON-encodable and risks breaking enqueues that pass
+# Django model instances. That hardening is tracked separately.
+CELERY_RESULT_SERIALIZER = 'json'
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_ACCEPT_CONTENT = ['json', 'pickle']
 CELERY_RESULT_EXPIRES = 600

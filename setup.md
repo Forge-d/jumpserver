@@ -62,7 +62,7 @@ uv run python apps/manage.py makemigrations grydd_platform
 uv run python apps/manage.py migrate grydd_platform
 
 # Then start
-uv run python jms start web
+uv run python jms start web & uv run python jms start task
 
 
 -------------------------------------------- POST App Setup for Debugging -----------------------------------------------------------------------
