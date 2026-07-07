@@ -25,6 +25,48 @@ services:
     ports:
       - "6379:6379"
 
+  # OpenBao — external secret-store used by BOTH the Python
+  # JumpServer (this compose) AND the Go grydd-pam-core service
+  # (../grydd-pam-core/docker-compose.yml runs its own
+  # grydd-pam-openbao container — start whichever you need).
+  #
+  # If you want a single OpenBao shared across both stacks,
+  # comment this block out and run the Go-side compose; both
+  # stacks talk to 127.0.0.1:8200 from the host.
+  #
+  # For the Python gunicorn running ON THE HOST, set in your
+  # config.yml or env:
+  #   VAULT_ENABLED:        true
+  #   VAULT_BACKEND:        hcp
+  #   VAULT_HCP_HOST:       http://127.0.0.1:8200
+  #   VAULT_HCP_TOKEN:      dev-root-token-not-for-prod
+  #   VAULT_HCP_MOUNT_POINT: jumpserver
+  #
+  # The Go service's chunk-8-vault wiring uses the SAME defaults
+  # so secrets written by either stack are readable on the other.
+  openbao:
+    image: ghcr.io/openbao/openbao:latest
+    container_name: jms_openbao
+    restart: always
+    cap_add:
+      - IPC_LOCK
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: dev-root-token-not-for-prod
+      BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      BAO_LOG_LEVEL: info
+    command:
+      - server
+      - -dev
+      - -dev-root-token-id=dev-root-token-not-for-prod
+      - -dev-listen-address=0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    profiles:
+      # Opt-in: only start when the operator passes
+      # `--profile vault`. Avoids port-collision with the
+      # Go-side compose if both are running.
+      - vault
+
   koko:
     image: jumpserver/koko:v4.10.16-ce
     container_name: jms_koko
