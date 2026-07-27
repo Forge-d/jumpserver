@@ -1,3 +1,10 @@
+# Unified project name — the three grydd-pam compose stacks (this one +
+# grydd-pam-connectors/deploy/connector + grydd-pam-core) all share
+# `name: grydd-pam` so Docker Desktop groups them together. Container
+# names stay unchanged (they are pinned via container_name: on each
+# service).
+name: grydd-pam
+
 services:
 
   db:
@@ -16,7 +23,7 @@ services:
       test: ["CMD-SHELL", "pg_isready -U jumpserver"]
       interval: 5s
       retries: 10
-    networks: [default, grydd]
+
 
   redis:
     image: redis:7-alpine
@@ -25,7 +32,7 @@ services:
     command: redis-server --requirepass redis_dev_pass_2024
     ports:
       - "6379:6379"
-    networks: [default, grydd]
+
 
   # OpenBao — external secret-store used by BOTH the Python
   # JumpServer (this compose) AND the Go grydd-pam-core service
@@ -116,7 +123,7 @@ services:
       - "8082:8082"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    networks: [default, grydd]
+
 
   web:
     image: jumpserver/web:v4.10.16-ce
@@ -145,7 +152,7 @@ services:
       - ./nginx-includes/lion.conf:/etc/nginx/includes/lion.conf:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    networks: [default, grydd]
+
 
   core:
     image: nginx:alpine
@@ -155,23 +162,24 @@ services:
       - ./core-proxy.conf:/etc/nginx/conf.d/default.conf:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    networks: [default, grydd]
+
 
 volumes:
+  # Pre-cutover Postgres data lives at `jumpserver_jms_pg_data` — the
+  # volume created when this compose was still project=jumpserver. The
+  # cutover renamed the project to grydd-pam which would otherwise create
+  # a fresh empty `grydd-pam_jms_pg_data` and lose every terminal
+  # registration, ticket flow, and access key. Pin the old volume by name
+  # so the Postgres cluster + all schemas survive the project rename.
   jms_pg_data:
-  jms_data:
-
-# grydd_default is the unified docker network the grydd-pam-connectors
-# stack (grydd-terminal, grydd-graphical, grydd-gateway, grydd-replay-worker)
-# lives on. Retained services here declare it as external + attach to it
-# so container-to-container name resolution works BOTH ways: jms_web's
-# nginx resolves grydd-terminal / grydd-graphical for its /koko + /lion
-# includes, and connectors resolve jms_core_proxy / jms_redis for their
-# CORE_HOST + Redis config. The network is created by
-# grydd-pam-connectors/deploy/connector or manually via
-# `docker network create grydd_default`.
-networks:
-  default: {}      # jumpserver_default — retained
-  grydd:
     external: true
-    name: grydd_default
+    name: jumpserver_jms_pg_data
+  jms_data:
+    external: true
+    name: jumpserver_jms_data
+
+# No explicit `networks:` block — every service in every stack shares
+# `name: grydd-pam` (this compose + ../grydd-pam-connectors/deploy/connector +
+# ../grydd-pam-core), so they all attach to the same implicit
+# `grydd-pam_default` bridge network. Container-to-container name
+# resolution works across the entire stack out of the box.
