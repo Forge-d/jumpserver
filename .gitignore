@@ -49,3 +49,8 @@ apps.iml
 *.db
 *.mmdb
 *.ipdb
+
+# Nginx-config backups saved during the Python → Go core cutover.
+# Kept locally so operators can diff the pre-cutover config; not
+# committed. Also matches any future *.python-backup snapshots.
+*.python-backup
